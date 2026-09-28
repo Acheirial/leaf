@@ -234,6 +234,7 @@ impl SocksAddrPortFirstType {
     const DOMAIN: u8 = 0x2;
 }
 
+#[derive(Clone, Copy)]
 pub enum SocksAddrWireType {
     PortFirst,
     PortLast,
@@ -247,10 +248,6 @@ pub enum SocksAddr {
 
 fn insuff_bytes() -> io::Error {
     io::Error::other("insufficient bytes")
-}
-
-fn invalid_domain() -> io::Error {
-    io::Error::other("invalid domain")
 }
 
 fn invalid_addr_type() -> io::Error {
@@ -379,52 +376,43 @@ impl SocksAddr {
         r: &mut T,
         addr_type: SocksAddrWireType,
     ) -> io::Result<Self> {
-        match addr_type {
-            SocksAddrWireType::PortLast => match r.read_u8().await? {
-                SocksAddrPortLastType::V4 => {
-                    let ip = Ipv4Addr::from(r.read_u32().await?);
-                    let port = r.read_u16().await?;
-                    Ok(Self::Ip((ip, port).into()))
-                }
-                SocksAddrPortLastType::V6 => {
-                    let ip = Ipv6Addr::from(r.read_u128().await?);
-                    let port = r.read_u16().await?;
-                    Ok(Self::Ip((ip, port).into()))
-                }
+        // Read the fixed-size head, then size the rest of the frame from its
+        // own length fields, and hand the whole thing to the slice parser so
+        // there is only one wire codec.
+        let mut buf = match addr_type {
+            // [type, ...]
+            SocksAddrWireType::PortLast => vec![r.read_u8().await?],
+            // [port hi, port lo, type, ...]
+            SocksAddrWireType::PortFirst => {
+                let mut head = [0u8; 3];
+                r.read_exact(&mut head).await?;
+                head.to_vec()
+            }
+        };
+        let remaining = match addr_type {
+            SocksAddrWireType::PortLast => match buf[0] {
+                SocksAddrPortLastType::V4 => 4 + 2,
+                SocksAddrPortLastType::V6 => 16 + 2,
                 SocksAddrPortLastType::DOMAIN => {
-                    let domain_len = r.read_u8().await? as usize;
-                    let mut buf = vec![0u8; domain_len];
-                    let n = r.read_exact(&mut buf).await?;
-                    debug_assert_eq!(domain_len, n);
-                    let domain = String::from_utf8(buf).map_err(|_| invalid_domain())?;
-                    let port = r.read_u16().await?;
-                    Ok(Self::Domain(domain, port))
+                    buf.push(r.read_u8().await?);
+                    buf[1] as usize + 2
                 }
-                _ => Err(invalid_addr_type()),
+                _ => return Err(invalid_addr_type()),
             },
-            SocksAddrWireType::PortFirst => match r.read_u8().await? {
-                SocksAddrPortFirstType::V4 => {
-                    let port = r.read_u16().await?;
-                    let ip = Ipv4Addr::from(r.read_u32().await?);
-                    Ok(Self::Ip((ip, port).into()))
-                }
-                SocksAddrPortFirstType::V6 => {
-                    let port = r.read_u16().await?;
-                    let ip = Ipv6Addr::from(r.read_u128().await?);
-                    Ok(Self::Ip((ip, port).into()))
-                }
+            SocksAddrWireType::PortFirst => match buf[2] {
+                SocksAddrPortFirstType::V4 => 4,
+                SocksAddrPortFirstType::V6 => 16,
                 SocksAddrPortFirstType::DOMAIN => {
-                    let port = r.read_u16().await?;
-                    let domain_len = r.read_u8().await? as usize;
-                    let mut buf = vec![0u8; domain_len];
-                    let n = r.read_exact(&mut buf).await?;
-                    debug_assert_eq!(domain_len, n);
-                    let domain = String::from_utf8(buf).map_err(|_| invalid_domain())?;
-                    Ok(Self::Domain(domain, port))
+                    buf.push(r.read_u8().await?);
+                    buf[3] as usize
                 }
-                _ => Err(invalid_addr_type()),
+                _ => return Err(invalid_addr_type()),
             },
-        }
+        };
+        let start = buf.len();
+        buf.resize(start + remaining, 0);
+        r.read_exact(&mut buf[start..]).await?;
+        Self::try_from((buf.as_slice(), addr_type))
     }
 }
 
@@ -432,7 +420,10 @@ impl Clone for SocksAddr {
     fn clone(&self) -> Self {
         match self {
             SocksAddr::Ip(a) => Self::from(a.to_owned()),
-            SocksAddr::Domain(domain, port) => Self::try_from((domain, *port)).unwrap(),
+            SocksAddr::Domain(domain, port) => match domain.parse::<IpAddr>() {
+                Ok(ip) => Self::Ip(SocketAddr::new(ip, *port)),
+                Err(_) => Self::Domain(domain.clone(), *port),
+            },
         }
     }
 }
@@ -571,49 +562,148 @@ impl TryFrom<(&[u8], SocksAddrWireType)> for SocksAddr {
                 }
                 _ => Err(io::Error::other("invalid address type")),
             },
-            SocksAddrWireType::PortFirst => match buf[0] {
-                SocksAddrPortFirstType::V4 => {
-                    let buf = &buf[1..];
-                    if buf.len() < 4 + 2 {
-                        return Err(insuff_bytes());
-                    }
-                    let port = u16::from_be_bytes(buf[..2].try_into().unwrap());
-                    let buf = &buf[2..];
-                    let mut ip_bytes = [0u8; 4];
-                    ip_bytes.copy_from_slice(&buf[..4]);
-                    let ip = Ipv4Addr::from(ip_bytes);
-                    Ok(Self::Ip((ip, port).into()))
+            // [port hi, port lo, type, payload...]
+            SocksAddrWireType::PortFirst => {
+                if buf.len() < 3 {
+                    return Err(insuff_bytes());
                 }
-                SocksAddrPortFirstType::V6 => {
-                    let buf = &buf[1..];
-                    if buf.len() < 16 + 2 {
-                        return Err(insuff_bytes());
+                let port = u16::from_be_bytes([buf[0], buf[1]]);
+                let payload = &buf[3..];
+                match buf[2] {
+                    SocksAddrPortFirstType::V4 => {
+                        if payload.len() < 4 {
+                            return Err(insuff_bytes());
+                        }
+                        let mut ip_bytes = [0u8; 4];
+                        ip_bytes.copy_from_slice(&payload[..4]);
+                        let ip = Ipv4Addr::from(ip_bytes);
+                        Ok(Self::Ip((ip, port).into()))
                     }
-                    let port = u16::from_be_bytes(buf[..2].try_into().unwrap());
-                    let buf = &buf[2..];
-                    let mut ip_bytes = [0u8; 16];
-                    ip_bytes.copy_from_slice(&buf[..16]);
-                    let ip = Ipv6Addr::from(ip_bytes);
-                    Ok(Self::Ip((ip, port).into()))
+                    SocksAddrPortFirstType::V6 => {
+                        if payload.len() < 16 {
+                            return Err(insuff_bytes());
+                        }
+                        let mut ip_bytes = [0u8; 16];
+                        ip_bytes.copy_from_slice(&payload[..16]);
+                        let ip = Ipv6Addr::from(ip_bytes);
+                        Ok(Self::Ip((ip, port).into()))
+                    }
+                    SocksAddrPortFirstType::DOMAIN => {
+                        if payload.len() < 1 {
+                            return Err(insuff_bytes());
+                        }
+                        let domain_len = payload[0] as usize;
+                        if payload.len() < 1 + domain_len {
+                            return Err(insuff_bytes());
+                        }
+                        let domain = String::from_utf8(payload[1..1 + domain_len].to_vec())
+                            .map_err(|e| io::Error::other(format!("invalid domain: {}", e)))?;
+                        Ok(Self::Domain(domain, port))
+                    }
+                    _ => Err(io::Error::other("invalid address type")),
                 }
-                SocksAddrPortFirstType::DOMAIN => {
-                    let buf = &buf[1..];
-                    if buf.len() < 3 {
-                        return Err(insuff_bytes());
-                    }
-                    let port = u16::from_be_bytes(buf[..2].try_into().unwrap());
-                    let buf = &buf[2..];
-                    let domain_len = buf[0] as usize;
-                    let buf = &buf[1..];
-                    if buf.len() < domain_len {
-                        return Err(insuff_bytes());
-                    }
-                    let domain = String::from_utf8(buf[..domain_len].to_vec())
-                        .map_err(|e| io::Error::other(format!("invalid domain: {}", e)))?;
-                    Ok(Self::Domain(domain, port))
-                }
-                _ => Err(io::Error::other("invalid address type")),
-            },
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+    }
+
+    fn test_addrs() -> Vec<SocksAddr> {
+        vec![
+            SocksAddr::Ip("127.0.0.1:8080".parse().unwrap()),
+            SocksAddr::Ip("[2001:db8::1]:8080".parse().unwrap()),
+            SocksAddr::Domain("example.com".to_string(), 443),
+        ]
+    }
+
+    fn label(wire: &SocksAddrWireType) -> &'static str {
+        match wire {
+            SocksAddrWireType::PortFirst => "port-first",
+            SocksAddrWireType::PortLast => "port-last",
+        }
+    }
+
+    fn encode(addr: &SocksAddr, wire: SocksAddrWireType) -> Vec<u8> {
+        let mut buf = Vec::new();
+        addr.write_buf(&mut buf, wire);
+        buf
+    }
+
+    #[test]
+    fn write_buf_round_trips_through_slice_parser() {
+        for wire in [SocksAddrWireType::PortFirst, SocksAddrWireType::PortLast] {
+            for addr in test_addrs() {
+                let buf = encode(&addr, wire);
+                assert_eq!(buf.len(), addr.size(), "{} {:?}", label(&wire), addr);
+                let parsed = SocksAddr::try_from((buf.as_slice(), wire)).unwrap();
+                assert_eq!(parsed, addr, "{} {:?}", label(&wire), addr);
+                if let SocksAddrWireType::PortFirst = wire {
+                    // PortFirst leads with the big-endian port; the address
+                    // type byte only follows it.
+                    assert_eq!(buf[..2], addr.port().to_be_bytes());
+                    assert_eq!(
+                        buf[2],
+                        match &addr {
+                            SocksAddr::Ip(SocketAddr::V4(_)) => SocksAddrPortFirstType::V4,
+                            SocksAddr::Ip(SocketAddr::V6(_)) => SocksAddrPortFirstType::V6,
+                            SocksAddr::Domain(_, _) => SocksAddrPortFirstType::DOMAIN,
+                        }
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn write_buf_round_trips_through_read_from() {
+        runtime().block_on(async {
+            for wire in [SocksAddrWireType::PortFirst, SocksAddrWireType::PortLast] {
+                for addr in test_addrs() {
+                    let buf = encode(&addr, wire);
+                    let mut r: &[u8] = buf.as_slice();
+                    let parsed = SocksAddr::read_from(&mut r, wire).await.unwrap();
+                    assert_eq!(parsed, addr, "{} {:?}", label(&wire), addr);
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn truncated_frames_are_errors_not_panics() {
+        runtime().block_on(async {
+            for wire in [SocksAddrWireType::PortFirst, SocksAddrWireType::PortLast] {
+                for addr in test_addrs() {
+                    let buf = encode(&addr, wire);
+                    for len in 0..buf.len() {
+                        let truncated = &buf[..len];
+                        assert!(
+                            SocksAddr::try_from((truncated, wire)).is_err(),
+                            "slice parser accepted {}-byte prefix of {} {:?}",
+                            len,
+                            label(&wire),
+                            addr
+                        );
+                        let mut r: &[u8] = truncated;
+                        assert!(
+                            SocksAddr::read_from(&mut r, wire).await.is_err(),
+                            "read_from accepted {}-byte prefix of {} {:?}",
+                            len,
+                            label(&wire),
+                            addr
+                        );
+                    }
+                }
+            }
+        });
     }
 }
