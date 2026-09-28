@@ -314,6 +314,8 @@ pub struct FailOverOutboundSettings {
     pub cache_size: Option<u32>,
     #[serde(rename = "cacheTimeout", alias = "cache_timeout")]
     pub cache_timeout: Option<u32>,
+    #[serde(rename = "lastResort", alias = "last_resort")]
+    pub last_resort: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -1098,9 +1100,10 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                         if let Some(ext_uuid) = &ext_settings.uuid {
                             settings.uuid = ext_uuid.clone();
                         }
-                        if let Some(ext_security) = &ext_settings.security {
-                            settings.security = ext_security.clone();
-                        }
+                        settings.security = ext_settings
+                            .security
+                            .clone()
+                            .unwrap_or_else(|| "chacha20-ietf-poly1305".to_string());
                         let settings = settings.write_to_bytes().unwrap();
                         outbound.settings = settings;
                     }
@@ -1288,6 +1291,7 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                         settings.fallback_cache = ext_settings.fallback_cache.unwrap_or(false);
                         settings.cache_size = ext_settings.cache_size.unwrap_or(256);
                         settings.cache_timeout = ext_settings.cache_timeout.unwrap_or(60); // 60 mins
+                        settings.last_resort = ext_settings.last_resort.clone();
                         let settings = settings.write_to_bytes().unwrap();
                         outbound.settings = settings;
                     }
@@ -1504,7 +1508,7 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                         match external_rule::add_external_rule(&mut rule, &ext_external) {
                             Ok(_) => (),
                             Err(e) => {
-                                println!("load external rule failed: {}", e);
+                                tracing::warn!("load external rule failed: {}", e);
                             }
                         }
                     }

@@ -17,6 +17,20 @@ pub mod conf;
 pub use internal::*;
 
 pub fn from_string(s: &str) -> Result<internal::Config> {
+    // JSON configs are always objects, so an input beginning with `{` is
+    // unambiguously JSON. Parse it directly and propagate errors instead of
+    // silently falling through to the conf parser (which would accept
+    // arbitrary text and produce an empty config).
+    if s.trim_start().starts_with('{') {
+        #[cfg(feature = "config-json")]
+        {
+            return json::from_string(s);
+        }
+        #[cfg(not(feature = "config-json"))]
+        {
+            return Err(anyhow!("json config is not supported by this build"));
+        }
+    }
     #[cfg(feature = "config-json")]
     {
         if let Ok(c) = json::from_string(s) {

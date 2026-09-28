@@ -3,8 +3,9 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufRead};
 use std::path::Path;
+use std::sync::LazyLock;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use regex::Regex;
 
 use crate::config::{common, internal};
@@ -231,14 +232,16 @@ where
     Ok(io::BufReader::new(file).lines())
 }
 
+static REMOVE_COMMENTS_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(#[^*]*)").unwrap());
+static GET_SECTION_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^\s*\[\s*([^\]]*)\s*\]\s*$").unwrap());
+
 fn remove_comments(text: &str) -> Cow<'_, str> {
-    let re = Regex::new(r"(#[^*]*)").unwrap();
-    re.replace(text, "")
+    REMOVE_COMMENTS_RE.replace(text, "")
 }
 
 fn get_section(text: &str) -> Option<&str> {
-    let re = Regex::new(r"^\s*\[\s*([^\]]*)\s*\]\s*$").unwrap();
-    let caps = re.captures(text);
+    let caps = GET_SECTION_RE.captures(text);
     caps.as_ref()?;
     Some(caps.unwrap().get(1).unwrap().as_str())
 }
@@ -1424,7 +1427,9 @@ pub fn to_common(conf: &Config) -> Result<common::Config> {
                     });
                     outbounds.append(&mut component_outbounds);
                 }
-                _ => {}
+                _ => {
+                    return Err(anyhow!("unsupported proxy protocol: {}", protocol));
+                }
             }
         }
     }
@@ -1487,6 +1492,7 @@ pub fn to_common(conf: &Config) -> Result<common::Config> {
                                 fallback_cache: ext_proxy_group.fallback_cache,
                                 cache_size: ext_proxy_group.cache_size,
                                 cache_timeout: ext_proxy_group.cache_timeout,
+                                last_resort: ext_proxy_group.last_resort.clone(),
                             }),
                         },
                     });
@@ -1513,7 +1519,9 @@ pub fn to_common(conf: &Config) -> Result<common::Config> {
                         },
                     });
                 }
-                _ => {}
+                _ => {
+                    return Err(anyhow!("unsupported proxy group protocol: {}", protocol));
+                }
             }
         }
     }
