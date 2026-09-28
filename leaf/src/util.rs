@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -141,6 +142,39 @@ async fn test_healthcheck_udp(
     crate::app::healthcheck::udp(dns_client, handler).await
 }
 
+/// Flatten the doubly-nested result produced by `timeout(to, fut)` into a
+/// single `anyhow::Result`, converting the outer error into an `anyhow::Error`.
+fn flatten_timeout<T, E>(r: std::result::Result<Result<T>, E>) -> Result<T>
+where
+    E: Into<anyhow::Error>,
+{
+    match r {
+        Ok(res) => res,
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Run the tcp and udp probe futures concurrently under a `to` timeout and
+/// flatten both results. `on_timeout` maps the elapsed-timeout error so every
+/// caller keeps its own timeout error text.
+pub(crate) async fn probe<T, F1, F2, M>(
+    to: Duration,
+    tcp: F1,
+    udp: F2,
+    on_timeout: M,
+) -> (Result<T>, Result<T>)
+where
+    F1: Future<Output = Result<T>>,
+    F2: Future<Output = Result<T>>,
+    M: Fn(tokio::time::error::Elapsed) -> anyhow::Error,
+{
+    let (tcp_res, udp_res) = futures::future::join(timeout(to, tcp), timeout(to, udp)).await;
+    (
+        flatten_timeout(tcp_res.map_err(|e| on_timeout(e))),
+        flatten_timeout(udp_res.map_err(|e| on_timeout(e))),
+    )
+}
+
 pub async fn test_outbound(
     tag: &str,
     config: &Config,
@@ -152,25 +186,13 @@ pub async fn test_outbound(
     let handler = outbound_manager
         .get(tag)
         .ok_or_else(|| anyhow!("outbound {} not found", tag))?;
-    let (tcp_res, udp_res) = futures::future::join(
-        timeout(to, test_tcp_outbound(dns_client.clone(), handler.clone())),
-        timeout(to, test_udp_outbound(dns_client, handler)),
+    let (tcp_res, udp_res) = probe(
+        to,
+        test_tcp_outbound(dns_client.clone(), handler.clone()),
+        test_udp_outbound(dns_client, handler),
+        |e: tokio::time::error::Elapsed| anyhow::Error::from(e),
     )
     .await;
-    let tcp_res = match tcp_res.map_err(|e| e.into()) {
-        Err(e) => Err(e),
-        Ok(res) => match res {
-            Err(e) => Err(e),
-            Ok(duration) => Ok(duration),
-        },
-    };
-    let udp_res = match udp_res.map_err(|e| e.into()) {
-        Err(e) => Err(e),
-        Ok(res) => match res {
-            Err(e) => Err(e),
-            Ok(duration) => Ok(duration),
-        },
-    };
     Ok((tcp_res, udp_res))
 }
 
@@ -189,19 +211,13 @@ pub async fn test_outbounds(
         let handler = handler.clone();
         let dns_client = dns_client.clone();
         tasks.push(async move {
-            let (tcp_res, udp_res) = futures::future::join(
-                timeout(to, test_tcp_outbound(dns_client.clone(), handler.clone())),
-                timeout(to, test_udp_outbound(dns_client, handler)),
+            let (tcp_res, udp_res) = probe(
+                to,
+                test_tcp_outbound(dns_client.clone(), handler.clone()),
+                test_udp_outbound(dns_client, handler),
+                |_: tokio::time::error::Elapsed| anyhow!("timeout"),
             )
             .await;
-            let tcp_res = match tcp_res {
-                Ok(res) => res,
-                Err(_) => Err(anyhow!("timeout")),
-            };
-            let udp_res = match udp_res {
-                Ok(res) => res,
-                Err(_) => Err(anyhow!("timeout")),
-            };
             (tag, (tcp_res, udp_res))
         });
     }
@@ -234,19 +250,13 @@ pub async fn stream_outbounds_tests(
         let handler = handler.clone();
         let dns_client = dns_client.clone();
         tasks.push(async move {
-            let (tcp_res, udp_res) = futures::future::join(
-                timeout(to, test_tcp_outbound(dns_client.clone(), handler.clone())),
-                timeout(to, test_udp_outbound(dns_client, handler)),
+            let (tcp_res, udp_res) = probe(
+                to,
+                test_tcp_outbound(dns_client.clone(), handler.clone()),
+                test_udp_outbound(dns_client, handler),
+                |_: tokio::time::error::Elapsed| anyhow!("timeout"),
             )
             .await;
-            let tcp_res = match tcp_res {
-                Ok(res) => res,
-                Err(_) => Err(anyhow!("timeout")),
-            };
-            let udp_res = match udp_res {
-                Ok(res) => res,
-                Err(_) => Err(anyhow!("timeout")),
-            };
             (tag, (tcp_res, udp_res))
         });
     }
@@ -266,27 +276,12 @@ pub async fn health_check_outbound(
     let handler = outbound_manager
         .get(tag)
         .ok_or_else(|| anyhow!("outbound {} not found", tag))?;
-    let (tcp_res, udp_res) = futures::future::join(
-        timeout(
-            to,
-            test_healthcheck_tcp(dns_client.clone(), handler.clone()),
-        ),
-        timeout(to, test_healthcheck_udp(dns_client, handler)),
+    let (tcp_res, udp_res) = probe(
+        to,
+        test_healthcheck_tcp(dns_client.clone(), handler.clone()),
+        test_healthcheck_udp(dns_client, handler),
+        |e: tokio::time::error::Elapsed| anyhow::Error::from(e),
     )
     .await;
-    let tcp_res = match tcp_res.map_err(|e| e.into()) {
-        Err(e) => Err(e),
-        Ok(res) => match res {
-            Err(e) => Err(e),
-            Ok(duration) => Ok(duration),
-        },
-    };
-    let udp_res = match udp_res.map_err(|e| e.into()) {
-        Err(e) => Err(e),
-        Ok(res) => match res {
-            Err(e) => Err(e),
-            Ok(duration) => Ok(duration),
-        },
-    };
     Ok((tcp_res, udp_res))
 }

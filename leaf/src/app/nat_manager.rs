@@ -7,7 +7,8 @@ use tokio::sync::{
     mpsc::{self, Sender},
     oneshot, Mutex, MutexGuard,
 };
-use tracing::{debug, error, trace, Instrument};
+use tokio::task::JoinHandle;
+use tracing::{debug, error, trace, warn, Instrument};
 
 use crate::app::dispatcher::Dispatcher;
 use crate::option;
@@ -30,24 +31,24 @@ impl UdpPacket {
     }
 }
 
-impl std::fmt::Display for UdpPacket {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(
-            f,
-            "src={} dst={} len={}",
-            self.src_addr,
-            self.dst_addr,
-            self.data.len()
-        )
-    }
-}
-
 type SessionMap = HashMap<DatagramSource, (Sender<UdpPacket>, oneshot::Sender<bool>, Instant)>;
 
 pub struct NatManager {
     sessions: Arc<Mutex<SessionMap>>,
     dispatcher: Arc<Dispatcher>,
     timeout_check_task: Mutex<Option<BoxFuture<'static, ()>>>,
+    timeout_check_handle: std::sync::Mutex<Option<JoinHandle<()>>>,
+}
+
+impl Drop for NatManager {
+    fn drop(&mut self) {
+        // Stop the periodic session sweeper if it was ever started.
+        if let Ok(mut guard) = self.timeout_check_handle.lock() {
+            if let Some(handle) = guard.take() {
+                handle.abort();
+            }
+        }
+    }
 }
 
 impl NatManager {
@@ -99,17 +100,49 @@ impl NatManager {
             sessions,
             dispatcher,
             timeout_check_task: Mutex::new(Some(timeout_check_task)),
+            timeout_check_handle: std::sync::Mutex::new(None),
         }
     }
 
     fn _send(&self, guard: &mut MutexGuard<'_, SessionMap>, key: &DatagramSource, pkt: UdpPacket) {
-        if let Some(sess) = guard.get_mut(key) {
-            if let Err(err) = sess.0.try_send(pkt) {
-                trace!("send uplink packet failed {}", err);
+        let remove = match guard.get_mut(key) {
+            Some(sess) => match sess.0.try_send(pkt) {
+                Ok(()) => {
+                    sess.2 = Instant::now(); // activity update
+                    false
+                }
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    // The uplink task is alive but busy. Keep the session alive
+                    // unchanged (do not refresh its activity) and drop the packet.
+                    trace!("send uplink packet failed: channel full for {}", key);
+                    false
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => {
+                    // The uplink task is gone, so no packet can ever reach the
+                    // target again. Drop the session (dropping it also signals the
+                    // downlink task to abort) instead of keeping it alive forever.
+                    warn!("uplink channel closed for session {}, dropping it", key);
+                    true
+                }
+            },
+            None => {
+                error!("no nat association found");
+                false
             }
-            sess.2 = Instant::now(); // activity update
-        } else {
-            error!("no nat association found");
+        };
+        if remove {
+            guard.remove(key);
+        }
+    }
+
+    /// Runs the lazy session-cleanup task at most once, keeping a handle to it so
+    /// it can be aborted when this manager is dropped.
+    async fn ensure_sweeper_started(&self) {
+        if let Some(task) = self.timeout_check_task.lock().await.take() {
+            let handle = tokio::spawn(task);
+            if let Ok(mut guard) = self.timeout_check_handle.lock() {
+                *guard = Some(handle);
+            }
         }
     }
 
@@ -121,6 +154,10 @@ impl NatManager {
         client_ch_tx: &Sender<UdpPacket>,
         pkt: UdpPacket,
     ) {
+        // Start the lazy sweeper before taking the sessions lock: no `.await`
+        // may happen while the lock is held.
+        self.ensure_sweeper_started().await;
+
         let mut guard = self.sessions.lock().await;
 
         if guard.contains_key(dgram_src) {
@@ -150,42 +187,57 @@ impl NatManager {
         // from inbound listener might have a default (empty) destination.
         sess.destination = pkt.dst_addr.clone();
 
-        self.add_session(sess, dgram_src.clone(), client_ch_tx.clone(), &mut guard)
-            .await;
+        // Register the session and build its channels while holding the lock, but
+        // do not spawn any task here: spawning awaits and would serialize every
+        // inbound packet behind the sessions mutex.
+        let (target_ch_tx, target_ch_rx) = mpsc::channel(*crate::option::UDP_UPLINK_CHANNEL_SIZE);
+        let (downlink_abort_tx, downlink_abort_rx) = oneshot::channel();
+
+        guard.insert(
+            dgram_src.clone(),
+            (target_ch_tx.clone(), downlink_abort_tx, Instant::now()),
+        );
+        let n_sessions = guard.len();
+
+        // Queue the very first packet before releasing the lock, so its delivery
+        // is ordered ahead of any concurrent packet for the same source.
+        if let Err(err) = target_ch_tx.try_send(pkt) {
+            trace!("send uplink packet failed {}", err);
+        }
+
+        drop(guard);
 
         debug!(
             "added udp session {} -> {} ({})",
-            &dgram_src,
-            &pkt.dst_addr,
-            guard.len(),
+            &dgram_src, &sess.destination, n_sessions,
         );
 
-        self._send(&mut guard, dgram_src, pkt);
+        drop(_g);
 
-        drop(guard);
+        // The sessions guard has been released, so spawning is safe.
+        self.spawn_session(
+            sess,
+            dgram_src.clone(),
+            client_ch_tx.clone(),
+            target_ch_rx,
+            downlink_abort_rx,
+            span,
+        );
     }
 
-    pub async fn add_session<'a>(
+    /// Spawns the dispatch/downlink/uplink tasks for a freshly registered session.
+    ///
+    /// MUST be called after the sessions mutex has been released: the spawned
+    /// tasks lock the sessions map again.
+    fn spawn_session(
         &self,
         sess: Session,
         raddr: DatagramSource,
         client_ch_tx: Sender<UdpPacket>,
-        guard: &mut MutexGuard<'a, SessionMap>,
+        mut target_ch_rx: mpsc::Receiver<UdpPacket>,
+        downlink_abort_rx: oneshot::Receiver<bool>,
+        span: tracing::Span,
     ) {
-        // Runs the lazy task for session cleanup job, this task will run only once.
-        if let Some(task) = self.timeout_check_task.lock().await.take() {
-            tokio::spawn(task);
-        }
-
-        let (target_ch_tx, mut target_ch_rx) =
-            mpsc::channel(*crate::option::UDP_UPLINK_CHANNEL_SIZE);
-        let (downlink_abort_tx, downlink_abort_rx) = oneshot::channel();
-
-        guard.insert(
-            raddr.clone(),
-            (target_ch_tx, downlink_abort_tx, Instant::now()),
-        );
-
         let dispatcher = self.dispatcher.clone();
         let sessions = self.sessions.clone();
 
@@ -193,7 +245,6 @@ impl NatManager {
         // because we have stream type transports for UDP traffic, establishing a
         // TCP stream would block the task.
         let raddr_cloned = raddr.clone();
-        let span = sess.span();
         tokio::spawn(
             async move {
                 // new socket to communicate with the target.

@@ -110,7 +110,6 @@ jobs:
           rust-version: stable
 
       - name: install llvm
-        if: ${{ matrix.os == 'macos-latest' }}
         run: |
           brew install llvm protobuf
 
@@ -183,7 +182,7 @@ jobs:
       - name: install toolchain
         run: |
           cargo install cbindgen
-          apt update && apt install -y make llvm-dev libclang-dev clang pkg-config unzip curl default-jdk build-essential
+          sudo apt update && sudo apt install -y make llvm-dev libclang-dev clang pkg-config unzip curl default-jdk build-essential
           export ANDROID_HOME=/tmp/Android/sdk
           export NDK_HOME=/tmp/Android/sdk/ndk/25.2.9519653
           export PATH=$ANDROID_HOME/cmdline-tools/bin:$PATH

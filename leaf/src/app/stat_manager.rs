@@ -321,15 +321,13 @@ impl StatManager {
                     }
                     Ok(None) => break, // Channel closed
                     Err(_) => {
-                        // Timeout reached, check if we need to do periodic cleanup anyway
-                        let mut sm_w = sm.write().await;
-                        sm_w.move_to_recent();
-                        continue;
+                        // Timeout reached; fall through to the periodic cleanup
+                        // below.
                     }
                 }
 
+                let mut sm_w = sm.write().await;
                 if !ids.is_empty() {
-                    let mut sm_w = sm.write().await;
                     for id in ids {
                         if let Some(counter) = sm_w.counters.remove(&id) {
                             counter.log_session_end();
@@ -338,10 +336,11 @@ impl StatManager {
                             }
                         }
                     }
-                    if sm_w.max_recent_connections > 0 {
-                        sm_w.prune_recent();
-                    }
                 }
+                // Age/retire completed counters on every iteration. Split datagram
+                // counters never emit an id, so this periodic pass is the only path
+                // that retires them; it only moves counters that have completed.
+                sm_w.move_to_recent();
             }
         })
     }

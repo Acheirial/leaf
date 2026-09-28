@@ -54,7 +54,7 @@ pub mod failover;
 pub mod hc;
 #[cfg(feature = "inbound-http")]
 pub mod http;
-#[cfg(feature = "outbound-mptp")]
+#[cfg(any(feature = "inbound-mptp", feature = "outbound-mptp"))]
 pub mod mptp;
 #[cfg(all(feature = "inbound-nf", windows))]
 pub mod nf;
@@ -413,6 +413,18 @@ pub async fn connect_stream_outbound(
                 new_tcp_stream(dns_client, &dest.host(), &dest.port()).await?,
             ))
         }
+        OutboundConnect::Proxy(Network::Udp, addr, port) => {
+            trace!(
+                "connect stream proxy udp outbound addr={} port={}",
+                &addr,
+                port
+            );
+            Err(io::Error::other(format!(
+                "outbound handler is configured for UDP (addr={} port={}) but was used to \
+                 dial a TCP stream; check the routing and outbound configuration",
+                &addr, &port
+            )))
+        }
         _ => {
             trace!("connect stream None");
             Ok(None)
@@ -575,7 +587,7 @@ pub enum OutboundConnect {
     Unknown,
 }
 
-/// An outbound handler for outgoing TCP conections.
+/// An outbound handler for outgoing TCP connections.
 #[async_trait]
 pub trait OutboundStreamHandler: Send + Sync + Unpin {
     /// Returns the address which the underlying transport should
@@ -583,7 +595,7 @@ pub trait OutboundStreamHandler: Send + Sync + Unpin {
     fn connect_addr(&self) -> OutboundConnect;
 
     /// Handles a session with the given stream. On success, returns a
-    /// stream wraps the incoming stream.
+    /// stream that wraps the incoming stream.
     async fn handle<'a>(
         &'a self,
         sess: &'a Session,
@@ -622,7 +634,7 @@ pub trait OutboundDatagramSendHalf: Sync + Send + Unpin {
     /// number of bytes sent.
     async fn send_to(&mut self, buf: &[u8], dst_addr: &SocksAddr) -> io::Result<usize>;
 
-    /// Close the soccket gracefully.
+    /// Close the socket gracefully.
     async fn close(&mut self) -> io::Result<()>;
 }
 
@@ -637,7 +649,7 @@ pub trait OutboundDatagramHandler: Send + Sync + Unpin {
     fn transport_type(&self) -> DatagramTransportType;
 
     /// Handles a session with the transport. On success, returns an outbound
-    /// datagram wraps the incoming transport.
+    /// datagram that wraps the incoming transport.
     async fn handle<'a>(
         &'a self,
         sess: &'a Session,

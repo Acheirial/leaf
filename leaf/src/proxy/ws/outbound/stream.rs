@@ -61,8 +61,11 @@ impl OutboundStreamHandler for Handler {
             } else {
                 sess.destination.host()
             };
-            let mut url = Url::parse(&format!("ws://{}", host)).unwrap();
-            url = url.join(self.path.as_str()).unwrap();
+            let mut url = Url::parse(&format!("ws://{}", host))
+                .map_err(|e| io::Error::other(format!("invalid ws host {}: {}", host, e)))?;
+            url = url
+                .join(self.path.as_str())
+                .map_err(|e| io::Error::other(format!("invalid ws path {}: {}", self.path, e)))?;
             let req = Request {
                 uri: url.as_ref(),
                 headers: &self.headers,

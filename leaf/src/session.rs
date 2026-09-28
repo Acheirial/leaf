@@ -99,8 +99,8 @@ pub struct Session {
     pub forwarded_source: Option<IpAddr>,
     /// Optional process name that initiated this connection.
     pub process_name: Option<String>,
-    /// Instructs a multiplexed transport should creates a new underlying
-    /// connection for this session, and it will be used only once.
+    /// Requires a multiplexed transport to create a new underlying connection
+    /// for this session and use it only once.
     pub new_conn_once: bool,
     /// The sniffed domain name from TLS SNI.
     pub tls_sniffed_domain: Option<String>,
@@ -555,11 +555,11 @@ impl TryFrom<(&[u8], SocksAddrWireType)> for SocksAddr {
                     Ok(Self::Ip((ip, port).into()))
                 }
                 SocksAddrPortLastType::DOMAIN => {
-                    if buf.is_empty() {
+                    if buf.len() < 2 {
                         return Err(insuff_bytes());
                     }
                     let domain_len = buf[1] as usize;
-                    if buf.len() < 1 + domain_len + 2 {
+                    if buf.len() < 2 + domain_len + 2 {
                         return Err(insuff_bytes());
                     }
                     let domain = String::from_utf8(buf[2..domain_len + 2].to_vec())

@@ -51,13 +51,12 @@ A versatile and efficient proxy framework.
 |---|---|---|---|
 | TUN | ✅ | ❌ | Linux, macOS, Windows, iOS, Android; lwip, smoltcp |
 | NF | ✅ | ❌ | Windows, [NetFilter SDK](https://netfiltersdk.com/) |
-| TPROXY | ❌ | ❌ | Linux; Coming soon |
 
 ## Building
 
 ```sh
 cargo build -p leaf-cli --release
-./target/debug/leaf --help
+./target/release/leaf --help
 ```
 
 ## License

@@ -105,7 +105,9 @@ impl Handler {
         #[cfg(all(not(feature = "rustls-tls"), feature = "openssl-tls"))]
         {
             let _ = (certificate, certificate_key, ech_config, ech_key);
-            unimplemented!();
+            Err(anyhow::anyhow!(
+                "tls inbound requires the rustls-tls feature"
+            ))
         }
         #[cfg(all(not(feature = "rustls-tls"), not(feature = "openssl-tls")))]
         {
@@ -275,7 +277,10 @@ impl InboundStreamHandler for Handler {
         #[cfg(all(not(feature = "rustls-tls"), feature = "openssl-tls"))]
         {
             let _ = (sess, stream);
-            unimplemented!();
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "tls inbound requires the rustls-tls feature",
+            ))
         }
         #[cfg(all(not(feature = "rustls-tls"), not(feature = "openssl-tls")))]
         {

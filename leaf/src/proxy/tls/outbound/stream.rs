@@ -185,15 +185,9 @@ impl Handler {
             let builder = builder
                 .dangerous()
                 .with_custom_certificate_verifier(Arc::new(dangerous::NotVerified));
-            if certificate.is_some() {
-                if certificate_key.is_some() {
-                    builder.with_no_client_auth()
-                } else {
-                    builder.with_no_client_auth()
-                }
-            } else {
-                builder.with_no_client_auth()
-            }
+            // FIXME: client authentication is not configured
+            let _ = certificate_key;
+            builder.with_no_client_auth()
         } else {
             builder.with_root_certificates(roots).with_no_client_auth()
         };
@@ -363,11 +357,17 @@ impl Handler {
             let mut builder =
                 SslConnector::builder(SslMethod::tls()).expect("create ssl connector failed");
             if !alpns.is_empty() {
-                let wire = alpns
-                    .iter()
-                    .map(|a| [&[a.len() as u8], a.as_bytes()].concat())
-                    .collect::<Vec<Vec<u8>>>()
-                    .concat();
+                let mut wire = Vec::new();
+                for alpn in alpns.iter() {
+                    if alpn.len() > 255 {
+                        return Err(anyhow::anyhow!(
+                            "tls outbound alpn protocol name too long: {}",
+                            alpn
+                        ));
+                    }
+                    wire.push(alpn.len() as u8);
+                    wire.extend_from_slice(alpn.as_bytes());
+                }
                 builder.set_alpn_protos(&wire).expect("set alpn failed");
             }
             if insecure {
