@@ -9,7 +9,7 @@ use lazy_static::lazy_static;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio::sync::RwLock;
-use tokio::time::{timeout, Duration};
+use tokio::time::Duration;
 use tracing::{info, trace, warn};
 
 #[cfg(feature = "auto-reload")]
@@ -75,7 +75,7 @@ pub struct RuntimeManager {
     auto_reload: bool,
     reload_tx: mpsc::Sender<std::sync::mpsc::SyncSender<Result<(), Error>>>,
     shutdown_tx: mpsc::Sender<()>,
-    router: Arc<RwLock<Router>>,
+    router: Arc<RwLock<Arc<Router>>>,
     dns_client: Arc<RwLock<DnsClient>>,
     outbound_manager: Arc<RwLock<OutboundManager>>,
     stat_manager: SyncStatManager,
@@ -91,7 +91,7 @@ impl RuntimeManager {
         #[cfg(feature = "auto-reload")] auto_reload: bool,
         reload_tx: mpsc::Sender<std::sync::mpsc::SyncSender<Result<(), Error>>>,
         shutdown_tx: mpsc::Sender<()>,
-        router: Arc<RwLock<Router>>,
+        router: Arc<RwLock<Arc<Router>>>,
         dns_client: Arc<RwLock<DnsClient>>,
         outbound_manager: Arc<RwLock<OutboundManager>>,
         stat_manager: SyncStatManager,
@@ -150,26 +150,13 @@ impl RuntimeManager {
             crate::app::healthcheck::udp(dns_client, handler).await
         }
 
-        let (tcp_res, udp_res) = futures::future::join(
-            timeout(to, test_tcp(dns_client.clone(), handler.clone())),
-            timeout(to, test_udp(dns_client, handler)),
+        let (tcp_res, udp_res) = crate::util::probe(
+            to,
+            test_tcp(dns_client.clone(), handler.clone()),
+            test_udp(dns_client, handler),
+            |e: tokio::time::error::Elapsed| anyhow::Error::from(e),
         )
         .await;
-
-        let tcp_res = match tcp_res.map_err(|e| e.into()) {
-            Err(e) => Err(e),
-            Ok(res) => match res {
-                Err(e) => Err(e),
-                Ok(duration) => Ok(duration),
-            },
-        };
-        let udp_res = match udp_res.map_err(|e| e.into()) {
-            Err(e) => Err(e),
-            Ok(res) => match res {
-                Err(e) => Err(e),
-                Ok(duration) => Ok(duration),
-            },
-        };
         Ok((tcp_res, udp_res))
     }
 
@@ -227,7 +214,8 @@ impl RuntimeManager {
         info!("reloading from config file: {}", config_path);
         let mut config = config::from_file(config_path).map_err(Error::Config)?;
         app::logger::setup_logger(&config.log)?;
-        self.router.write().await.reload(&mut config.router)?;
+        let new_router = Router::new(&mut config.router, self.dns_client.clone());
+        *self.router.write().await = Arc::new(new_router);
         self.dns_client.write().await.reload(&config.dns)?;
         self.outbound_manager
             .write()
@@ -321,8 +309,17 @@ impl RuntimeManager {
                             // by an editor, in that case create a new watcher to watch
                             // the new file.
                             if let event::EventKind::Remove(event::RemoveKind::File) = ev.kind {
-                                if let Some(m) = RUNTIME_MANAGER.lock().unwrap().get(&rt_id) {
-                                    let _ = m.new_watcher();
+                                match RUNTIME_MANAGER.lock() {
+                                    Ok(manager) => {
+                                        if let Some(m) = manager.get(&rt_id) {
+                                            if let Err(e) = m.new_watcher() {
+                                                warn!("recreate config file watcher failed: {}", e);
+                                            }
+                                        }
+                                    }
+                                    Err(_) => {
+                                        warn!("runtime manager lock poisoned");
+                                    }
                                 }
                             }
                         }
@@ -339,7 +336,10 @@ impl RuntimeManager {
                 )
                 .map_err(Error::Watcher)?;
             info!("watching changes of file: {}", config_path);
-            self.watcher.lock().unwrap().replace(watcher);
+            self.watcher
+                .lock()
+                .map_err(|_| Error::RuntimeManager)?
+                .replace(watcher);
         }
         Ok(())
     }
@@ -364,14 +364,28 @@ pub fn reload(key: RuntimeId) -> Result<(), Error> {
 }
 
 pub fn shutdown(key: RuntimeId) -> bool {
-    if let Some(m) = RUNTIME_MANAGER.lock().unwrap().get(&key) {
-        return m.blocking_shutdown();
+    match RUNTIME_MANAGER.lock() {
+        Ok(manager) => {
+            if let Some(m) = manager.get(&key) {
+                return m.blocking_shutdown();
+            }
+            false
+        }
+        Err(_) => {
+            warn!("runtime manager lock poisoned");
+            false
+        }
     }
-    false
 }
 
 pub fn is_running(key: RuntimeId) -> bool {
-    RUNTIME_MANAGER.lock().unwrap().contains_key(&key)
+    match RUNTIME_MANAGER.lock() {
+        Ok(manager) => manager.contains_key(&key),
+        Err(_) => {
+            warn!("runtime manager lock poisoned");
+            false
+        }
+    }
 }
 
 pub fn test_config(config_path: &str) -> Result<(), Error> {
@@ -432,7 +446,7 @@ pub struct StartOptions {
 
 pub fn start(rt_id: RuntimeId, opts: StartOptions) -> Result<(), Error> {
     #[cfg(debug_assertions)]
-    println!("start with options:\n{:#?}", opts);
+    info!("start with options: {:#?}", opts);
 
     let (reload_tx, mut reload_rx) = mpsc::channel(1);
     let (shutdown_tx, mut shutdown_rx) = mpsc::channel(1);
@@ -462,10 +476,10 @@ pub fn start(rt_id: RuntimeId, opts: StartOptions) -> Result<(), Error> {
     let outbound_manager = Arc::new(RwLock::new(
         OutboundManager::new(&config.outbounds, dns_client.clone()).map_err(Error::Config)?,
     ));
-    let router = Arc::new(RwLock::new(Router::new(
+    let router = Arc::new(RwLock::new(Arc::new(Router::new(
         &mut config.router,
         dns_client.clone(),
-    )));
+    ))));
     let stat_manager = Arc::new(RwLock::new(StatManager::new()));
     runners.push(StatManager::cleanup_task(stat_manager.clone()));
     let dispatcher = Arc::new(Dispatcher::new(

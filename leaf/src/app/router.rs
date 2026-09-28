@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use anyhow::anyhow;
 use anyhow::Result;
-use async_recursion::async_recursion;
 use cidr::IpCidr;
 use futures::TryFutureExt;
 use maxminddb::geoip2::Country;
@@ -555,16 +554,6 @@ impl Router {
         }
     }
 
-    pub fn reload(&mut self, router: &mut protobuf::MessageField<config::Router>) -> Result<()> {
-        self.rules.clear();
-        if let Some(router) = router.as_mut() {
-            Self::load_rules(&mut self.rules, &mut router.rules);
-            self.domain_resolve = router.domain_resolve;
-        }
-        Ok(())
-    }
-
-    #[async_recursion]
     pub async fn pick_route<'a>(&'a self, sess: &'a Session) -> Result<Option<&'a String>> {
         let effective_dest = &sess.destination;
         for rule in &self.rules {

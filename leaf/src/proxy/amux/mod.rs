@@ -23,7 +23,7 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::sync::Mutex;
 use tokio::time::{sleep, Instant};
-use tracing::{debug, trace, Instrument};
+use tracing::{debug, trace, warn, Instrument};
 
 #[cfg(feature = "inbound-amux")]
 pub mod inbound;
@@ -446,6 +446,13 @@ impl MuxSession {
                                         }
                                     }
                                     // Sends data to the stream.
+                                    //
+                                    // This blocks the whole session while one
+                                    // stream's consumer is slow (head-of-line
+                                    // blocking). A non-blocking variant must not
+                                    // simply drop frames — that would corrupt the
+                                    // stream — it needs per-stream buffering with
+                                    // a global byte budget.
                                     if let Some(stream_read_tx) =
                                         streams.lock().await.get(&stream_id).cloned()
                                     {
@@ -745,16 +752,38 @@ impl MuxConnector {
             return None;
         }
         let frame_write_tx = self.frame_write_tx.clone();
-        let stream_id = random_u16();
         let stream_end = Arc::new(AtomicBool::new(false));
-        let (mux_stream, stream_read_tx) = MuxStream::new(
-            self.session_id,
-            stream_id,
-            frame_write_tx,
-            stream_end.clone(),
-        );
+        let mux_stream = {
+            let mut streams = self.streams.lock().await;
+            // Pick a stream ID that is not already in use. Collisions are
+            // extremely unlikely, but inserting a duplicate would silently
+            // replace another stream's channel and lose its data, so retry a
+            // bounded number of times.
+            let mut stream_id = None;
+            for _ in 0..64 {
+                let candidate = random_u16();
+                if !streams.contains_key(&candidate) {
+                    stream_id = Some(candidate);
+                    break;
+                }
+            }
+            let Some(stream_id) = stream_id else {
+                warn!(
+                    "failed to allocate a unique stream id (session {})",
+                    self.session_id
+                );
+                return None;
+            };
+            let (mux_stream, stream_read_tx) = MuxStream::new(
+                self.session_id,
+                stream_id,
+                frame_write_tx,
+                stream_end.clone(),
+            );
+            streams.insert(stream_id, stream_read_tx);
+            mux_stream
+        };
         self.stream_ends.push(stream_end);
-        self.streams.lock().await.insert(stream_id, stream_read_tx);
         self.total_accepted += 1;
         Some(mux_stream)
     }

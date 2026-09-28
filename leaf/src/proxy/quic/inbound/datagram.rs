@@ -157,9 +157,7 @@ async fn handle_conn(
     remote_addr: SocketAddr,
     conn: quinn::Connecting,
 ) -> Result<()> {
-    let (conn, _) = conn
-        .into_0rtt()
-        .map_err(|_| anyhow!("convert 0rtt failed"))?;
+    let conn = conn.await?;
     let send_timeout = Duration::from_secs(*crate::option::QUIC_ACCEPT_QUEUE_TIMEOUT);
     trace!("quic handling connection from {}", remote_addr);
     loop {

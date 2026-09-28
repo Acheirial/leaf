@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::fs;
 use std::io;
 use std::net::SocketAddr;
@@ -23,7 +24,7 @@ struct Manager {
     server_name: Option<String>,
     dns_client: SyncDnsClient,
     client_config: quinn::ClientConfig,
-    connections: RwLock<Vec<quinn::Connection>>,
+    connections: RwLock<VecDeque<quinn::Connection>>,
 }
 
 impl Manager {
@@ -114,7 +115,7 @@ impl Manager {
             server_name,
             dns_client,
             client_config,
-            connections: RwLock::new(Vec::new()),
+            connections: RwLock::new(VecDeque::new()),
         }
     }
 }
@@ -125,14 +126,19 @@ impl Manager {
     ) -> Result<QuicProxyStream<quinn::RecvStream, quinn::SendStream>> {
         let dial_timeout = Duration::from_secs(*crate::option::OUTBOUND_DIAL_TIMEOUT);
         let start = std::time::Instant::now();
-        loop {
+        // Try each pooled connection once, in FIFO order. A connection that is
+        // still healthy (e.g. merely at the peer's stream limit) is put back
+        // instead of being dropped, so a later call can reuse it.
+        let mut candidates = {
+            let conns = self.connections.read().await;
+            conns.len()
+        };
+        while candidates > 0 {
+            candidates -= 1;
+
             let conn = {
                 let mut conns = self.connections.write().await;
-                if conns.is_empty() {
-                    None
-                } else {
-                    Some(conns.swap_remove(0))
-                }
+                conns.pop_front()
             };
 
             let Some(conn) = conn else {
@@ -143,7 +149,7 @@ impl Manager {
                 Ok(Ok((send, recv))) => {
                     let rtt = conn.rtt();
                     let mut conns = self.connections.write().await;
-                    conns.insert(0, conn);
+                    conns.push_back(conn);
                     trace!(
                         "opened stream on existing connection (rtt {} ms) in {} ms",
                         rtt.as_millis(),
@@ -153,9 +159,15 @@ impl Manager {
                 }
                 Ok(Err(e)) => {
                     debug!("open stream failed: {}", e);
+                    if conn.close_reason().is_none() {
+                        self.connections.write().await.push_back(conn);
+                    }
                 }
                 Err(_) => {
                     debug!("open stream timed out");
+                    if conn.close_reason().is_none() {
+                        self.connections.write().await.push_back(conn);
+                    }
                 }
             }
         }
@@ -220,9 +232,9 @@ impl Manager {
 
             let mut conns = self.connections.write().await;
             if conns.len() >= 4 {
-                conns.swap_remove(0);
+                conns.pop_front();
             }
-            conns.push(conn);
+            conns.push_back(conn);
 
             trace!("opened quic stream on new connection",);
 

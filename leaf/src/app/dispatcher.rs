@@ -2,7 +2,6 @@ use std::io::{self};
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_recursion::async_recursion;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn, Instrument};
@@ -128,9 +127,22 @@ fn log_request(sess: &Session, outbound_tag: &str, handshake_time: Option<u128>)
     }
 }
 
+/// Outcome of picking an outbound for a session.
+enum PickOutbound {
+    /// A route was picked (or fell back to the default handler). `handler` is
+    /// the resolved outbound handler, if one exists for `tag`.
+    Picked {
+        tag: String,
+        is_default: bool,
+        handler: Option<AnyOutboundHandler>,
+    },
+    /// No route matched and no default handler is configured.
+    NoOutbound,
+}
+
 pub struct Dispatcher {
     pub(crate) outbound_manager: Arc<RwLock<OutboundManager>>,
-    pub(crate) router: Arc<RwLock<Router>>,
+    pub(crate) router: Arc<RwLock<Arc<Router>>>,
     dns_client: SyncDnsClient,
     stat_manager: SyncStatManager,
     dns_sniffer: DnsSniffer,
@@ -139,7 +151,7 @@ pub struct Dispatcher {
 impl Dispatcher {
     pub fn new(
         outbound_manager: Arc<RwLock<OutboundManager>>,
-        router: Arc<RwLock<Router>>,
+        router: Arc<RwLock<Arc<Router>>>,
         dns_client: SyncDnsClient,
         stat_manager: SyncStatManager,
     ) -> Self {
@@ -150,6 +162,28 @@ impl Dispatcher {
             stat_manager,
             dns_sniffer: DnsSniffer::new(),
         }
+    }
+
+    /// Snapshot the router, pick an outbound route for `sess`, fall back to the
+    /// default handler, record `sess.outbound_tag` and resolve the handler from
+    /// the outbound manager. The router read guard is released before any
+    /// `await` so a concurrent reload cannot deadlock the runtime.
+    async fn pick_outbound(&self, sess: &mut Session) -> anyhow::Result<PickOutbound> {
+        let router = self.router.read().await.clone();
+        let (tag, is_default) = match router.pick_route(&*sess).await? {
+            Some(tag) => (tag.to_owned(), false),
+            None => match self.outbound_manager.read().await.default_handler() {
+                Some(tag) => (tag, true),
+                None => return Ok(PickOutbound::NoOutbound),
+            },
+        };
+        sess.outbound_tag = tag.clone();
+        let handler = self.outbound_manager.read().await.get(&tag);
+        Ok(PickOutbound::Picked {
+            tag,
+            is_default,
+            handler,
+        })
     }
 
     pub async fn dispatch_stream<T>(&self, sess: Session, lhs: T)
@@ -238,40 +272,36 @@ impl Dispatcher {
             Box::new(lhs)
         };
 
-        let outbound = {
-            let router = self.router.read().await;
-            match router.pick_route(&sess).await {
-                Ok(Some(tag)) => {
+        let h = match self.pick_outbound(&mut sess).await {
+            Ok(PickOutbound::Picked {
+                tag,
+                is_default,
+                handler,
+            }) => {
+                if is_default {
+                    debug!("picked default out={}", &tag);
+                } else {
                     debug!(
                         "picked route out={} src={} dst={}",
-                        tag, &sess.source, &sess.destination
+                        &tag, &sess.source, &sess.destination
                     );
-                    tag.to_owned()
                 }
-                Ok(None) => {
-                    if let Some(tag) = self.outbound_manager.read().await.default_handler() {
-                        debug!("picked default out={}", &tag);
-                        tag
-                    } else {
-                        warn!("no outbound found");
-                        return;
-                    }
-                }
-                Err(err) => {
-                    debug!("pick route err={}", err);
+                if let Some(h) = handler {
+                    h
+                } else {
+                    // FIXME use  the default handler
+                    warn!("handler not found");
                     return;
                 }
             }
-        };
-
-        sess.outbound_tag = outbound.clone();
-
-        let h = if let Some(h) = self.outbound_manager.read().await.get(&outbound) {
-            h
-        } else {
-            // FIXME use  the default handler
-            warn!("handler not found");
-            return;
+            Ok(PickOutbound::NoOutbound) => {
+                warn!("no outbound found");
+                return;
+            }
+            Err(err) => {
+                debug!("pick route err={}", err);
+                return;
+            }
         };
 
         let handshake_start = tokio::time::Instant::now();
@@ -291,16 +321,16 @@ impl Dispatcher {
                 }
             };
 
-        let (stream, stats_wrapped) = if let Some(s) = stream {
+        let stream = if let Some(s) = stream {
             let s = self.stat_manager.write().await.stat_stream(s, sess.clone());
-            (Some(s), true)
+            Some(s)
         } else {
             lhs = self
                 .stat_manager
                 .write()
                 .await
                 .stat_inbound_stream(lhs, sess.clone());
-            (None, true)
+            None
         };
 
         let th = match h.stream() {
@@ -315,14 +345,6 @@ impl Dispatcher {
                 let elapsed = tokio::time::Instant::now().duration_since(handshake_start);
 
                 log_request(&sess, h.tag(), Some(elapsed.as_millis()));
-
-                if !stats_wrapped {
-                    rhs = self
-                        .stat_manager
-                        .write()
-                        .await
-                        .stat_stream(rhs, sess.clone());
-                }
 
                 match common::io::copy_buf_bidirectional_with_timeout(
                     &mut lhs,
@@ -349,27 +371,12 @@ impl Dispatcher {
     }
 
     pub async fn dispatch_stream_outbound(&self, mut sess: Session) -> io::Result<AnyStream> {
-        let outbound = {
-            let router = self.router.read().await;
-            match router.pick_route(&sess).await {
-                Ok(Some(tag)) => tag.to_owned(),
-                Ok(None) => {
-                    if let Some(tag) = self.outbound_manager.read().await.default_handler() {
-                        tag
-                    } else {
-                        return Err(io::Error::other("no outbound found"));
-                    }
-                }
-                Err(_) => return Err(io::Error::other("pick route failed")),
+        let h = match self.pick_outbound(&mut sess).await {
+            Ok(PickOutbound::Picked { handler, .. }) => {
+                handler.ok_or_else(|| io::Error::other("handler not found"))?
             }
-        };
-
-        sess.outbound_tag = outbound.clone();
-
-        let h = if let Some(h) = self.outbound_manager.read().await.get(&outbound) {
-            h
-        } else {
-            return Err(io::Error::other("handler not found"));
+            Ok(PickOutbound::NoOutbound) => return Err(io::Error::other("no outbound found")),
+            Err(_) => return Err(io::Error::other("pick route failed")),
         };
 
         let stream =
@@ -377,7 +384,6 @@ impl Dispatcher {
         h.stream()?.handle(&sess, None, stream).await
     }
 
-    #[async_recursion]
     pub async fn dispatch_datagram(
         &self,
         mut sess: Session,
@@ -387,10 +393,12 @@ impl Dispatcher {
             &sess.network, &sess.inbound_tag, &sess.source, &sess.destination
         );
 
-        if let Some(ip) = sess.destination.ip() {
-            if let Some(domain) = self.dns_sniffer.get(&ip).await {
-                debug!("dns sniffed domain={}", &domain);
-                sess.dns_sniffed_domain = Some(domain);
+        if option::DNS_DOMAIN_SNIFFING.load(std::sync::atomic::Ordering::Relaxed) {
+            if let Some(ip) = sess.destination.ip() {
+                if let Some(domain) = self.dns_sniffer.get(&ip).await {
+                    debug!("dns sniffed domain={}", &domain);
+                    sess.dns_sniffed_domain = Some(domain);
+                }
             }
         }
 
@@ -409,39 +417,35 @@ impl Dispatcher {
             }
         }
 
-        let outbound = {
-            let router = self.router.read().await;
-            match router.pick_route(&sess).await {
-                Ok(Some(tag)) => {
+        let h = match self.pick_outbound(&mut sess).await {
+            Ok(PickOutbound::Picked {
+                tag,
+                is_default,
+                handler,
+            }) => {
+                if is_default {
+                    debug!("picked default out={}", &tag);
+                } else {
                     debug!(
                         "picked route out={} src={} dst={}",
-                        tag, &sess.source, &sess.destination
+                        &tag, &sess.source, &sess.destination
                     );
-                    tag.to_owned()
                 }
-                Ok(None) => {
-                    if let Some(tag) = self.outbound_manager.read().await.default_handler() {
-                        debug!("picked default out={}", &tag);
-                        tag
-                    } else {
-                        warn!("no outbound found");
-                        return Err(io::Error::other("no outbound found"));
-                    }
-                }
-                Err(err) => {
-                    debug!("pick route err={}", err);
-                    return Err(io::Error::other("pick route failed"));
+                if let Some(h) = handler {
+                    h
+                } else {
+                    warn!("handler not found");
+                    return Err(io::Error::other("handler not found"));
                 }
             }
-        };
-
-        sess.outbound_tag = outbound.clone();
-
-        let h = if let Some(h) = self.outbound_manager.read().await.get(&outbound) {
-            h
-        } else {
-            warn!("handler not found");
-            return Err(io::Error::other("handler not found"));
+            Ok(PickOutbound::NoOutbound) => {
+                warn!("no outbound found");
+                return Err(io::Error::other("no outbound found"));
+            }
+            Err(err) => {
+                debug!("pick route err={}", err);
+                return Err(io::Error::other("pick route failed"));
+            }
         };
 
         let handshake_start = tokio::time::Instant::now();

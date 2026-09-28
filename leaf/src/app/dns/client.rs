@@ -1138,8 +1138,9 @@ impl DnsClient {
                     skip_resolve: true,
                     ..Default::default()
                 };
-                if let Ok(Some(tag)) = dispatcher.router.read().await.pick_route(&sess).await {
-                    is_direct_outbound = dispatcher.is_direct_outbound(tag).await;
+                let router = dispatcher.router.read().await.clone();
+                if let Some(tag) = router.pick_route(&sess).await.ok().flatten().cloned() {
+                    is_direct_outbound = dispatcher.is_direct_outbound(&tag).await;
                 }
             }
         }
