@@ -176,7 +176,7 @@ impl HandshakeRequest {
 
         let dst_addr = match Address::decode(buf)? {
             Some(a) => a,
-            None => unreachable!("We checked length"),
+            None => bail!("Truncated handshake request: incomplete destination address"),
         };
 
         let dst_port = buf.get_u16();
@@ -242,7 +242,7 @@ impl UdpHeader {
         let frag = buf.get_u8();
         let addr = match Address::decode(buf)? {
             Some(a) => a,
-            None => unreachable!(),
+            None => bail!("Truncated UDP header: incomplete destination address"),
         };
         let port = buf.get_u16();
 

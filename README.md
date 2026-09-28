@@ -44,6 +44,7 @@ A versatile and efficient proxy framework.
 |---|---|---|---|
 | Chain | ✅ | ✅ | Proxy chaining |
 | Failover | ❌ | ✅ | Failover with health check |
+| Select | ❌ | ✅ | Delegates to one configured actor; the active selection can be driven through the API |
 
 ### Transparent Proxying
 

@@ -43,7 +43,7 @@ impl OutboundStreamHandler for Handler {
         let host = sess.destination.host();
         let port = sess.destination.port();
 
-        let header = build_vless_tcp_header(&uuid_bytes, &host, port, addr_type);
+        let header = build_vless_tcp_header(&uuid_bytes, &host, port, addr_type)?;
 
         let mut stream = stream.ok_or_else(|| io::Error::other("invalid input"))?;
         stream.write_all(&header).await?;

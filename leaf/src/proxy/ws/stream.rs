@@ -100,7 +100,9 @@ impl<S: Sink<Message> + Unpin> AsyncWrite for WebSocketToStream<S> {
             .start_send(msg)
             .map_err(|_| broken_pipe())?;
 
-        let _ = Pin::new(&mut self.inner).poll_flush(cx);
+        ready!(Pin::new(&mut self.inner)
+            .poll_flush(cx)
+            .map_err(|_| broken_pipe()))?;
 
         Poll::Ready(Ok(buf.len()))
     }

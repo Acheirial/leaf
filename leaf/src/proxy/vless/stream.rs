@@ -1,9 +1,11 @@
+use std::io;
+
 pub fn build_vless_tcp_header(
     uuid_bytes: &[u8; 16],
     dst_addr: &str,
     dst_port: u16,
     addr_type: u8,
-) -> Vec<u8> {
+) -> io::Result<Vec<u8>> {
     let mut vless_header = vec![];
     vless_header.push(0x00); // Version
     vless_header.extend_from_slice(uuid_bytes);
@@ -33,9 +35,14 @@ pub fn build_vless_tcp_header(
             let addr: std::net::Ipv6Addr = dst_addr.parse().unwrap();
             vless_header.extend_from_slice(&addr.octets());
         }
-        _ => unreachable!(),
+        _ => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("invalid vless address type: {}", addr_type),
+            ))
+        }
     }
-    vless_header
+    Ok(vless_header)
 }
 
 pub struct VisionParser {

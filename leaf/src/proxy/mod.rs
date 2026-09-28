@@ -233,7 +233,8 @@ async fn bind_socket<T: BindSocket>(socket: &T, indicator: &SocketAddr) -> io::R
             OutboundBind::Interface(iface) => {
                 #[cfg(target_os = "macos")]
                 unsafe {
-                    let ifa = CString::new(iface.as_bytes()).unwrap();
+                    let ifa = CString::new(iface.as_bytes())
+                        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
                     let ifidx: libc::c_uint = libc::if_nametoindex(ifa.as_ptr());
                     if ifidx == 0 {
                         last_err = Some(io::Error::last_os_error());
@@ -265,7 +266,8 @@ async fn bind_socket<T: BindSocket>(socket: &T, indicator: &SocketAddr) -> io::R
                 }
                 #[cfg(target_os = "linux")]
                 unsafe {
-                    let ifa = CString::new(iface.as_bytes()).unwrap();
+                    let ifa = CString::new(iface.as_bytes())
+                        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
                     let ret = libc::setsockopt(
                         socket.as_fd().as_raw_fd(),
                         libc::SOL_SOCKET,
@@ -777,7 +779,11 @@ pub async fn peek_tcp_one_off(lhs: Option<&mut AnyStream>) -> Vec<u8> {
         let mut read_buf = Vec::with_capacity(2 * 1024);
         match timeout(Duration::from_millis(10), lhs.read_buf(&mut read_buf)).await {
             Ok(Ok(_)) => return read_buf,
-            _ => return Vec::new(),
+            Ok(Err(e)) => {
+                debug!("peek_tcp_one_off: read error: {}", e);
+                return Vec::new();
+            }
+            Err(_) => return Vec::new(),
         }
     }
     Vec::new()
