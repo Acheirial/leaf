@@ -575,7 +575,10 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                 "warn" => log.level = protobuf::EnumOrUnknown::new(internal::log::Level::WARN),
                 "error" => log.level = protobuf::EnumOrUnknown::new(internal::log::Level::ERROR),
                 "none" => log.level = protobuf::EnumOrUnknown::new(internal::log::Level::NONE),
-                _ => log.level = protobuf::EnumOrUnknown::new(internal::log::Level::WARN),
+                _ => {
+                    tracing::warn!("unknown log level `{}`, falling back to WARN", ext_level);
+                    log.level = protobuf::EnumOrUnknown::new(internal::log::Level::WARN)
+                }
             }
         }
 
@@ -654,6 +657,28 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                         let fd = ext_settings.fd.unwrap_or(-1);
                         if fd >= 0 {
                             settings.fd = fd;
+                            let mut ignored = Vec::new();
+                            if ext_settings.name.is_some() {
+                                ignored.push("name");
+                            }
+                            if ext_settings.address.is_some() {
+                                ignored.push("address");
+                            }
+                            if ext_settings.gateway.is_some() {
+                                ignored.push("gateway");
+                            }
+                            if ext_settings.netmask.is_some() {
+                                ignored.push("netmask");
+                            }
+                            if ext_settings.mtu.is_some() {
+                                ignored.push("mtu");
+                            }
+                            if !ignored.is_empty() {
+                                tracing::warn!(
+                                    "tun inbound: option(s) {} are ignored because `fd` is set",
+                                    ignored.join(", ")
+                                );
+                            }
                         } else {
                             settings.fd = -1; // disable fd option
                             if let Some(ext_name) = &ext_settings.name {
@@ -688,7 +713,9 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                                 settings.dns_servers.push(ext_dns_server.clone());
                             }
                         }
-                        let settings = settings.write_to_bytes().unwrap();
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
                         inbound.settings = settings;
                     }
                     inbounds.push(inbound);
@@ -715,7 +742,9 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                             ext_settings.network.clone().unwrap_or("tcp".to_string());
                         settings.address = ext_settings.address.clone();
                         settings.port = ext_settings.port as u32;
-                        let settings = settings.write_to_bytes().unwrap();
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
                         inbound.settings = settings;
                     }
                     inbounds.push(inbound);
@@ -751,7 +780,14 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                             .nfapi
                             .clone()
                             .unwrap_or("nfapi.dll".to_string());
-                        let settings = settings.write_to_bytes().unwrap();
+                        if ext_settings.tun2socks.is_some() {
+                            tracing::warn!(
+                                "nf inbound setting `tun2socks` has no effect and is ignored"
+                            );
+                        }
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
                         inbound.settings = settings;
                     }
                     inbounds.push(inbound);
@@ -765,7 +801,9 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                         settings.path = ext_settings.path.clone();
                         settings.request = ext_settings.request.clone().unwrap_or_default();
                         settings.response = ext_settings.response.clone();
-                        let settings = settings.write_to_bytes().unwrap();
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
                         inbound.settings = settings;
                     }
                     inbounds.push(inbound);
@@ -782,7 +820,9 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                         if let Some(ext_password) = &ext_settings.password {
                             settings.password = ext_password.clone();
                         }
-                        let settings = settings.write_to_bytes().unwrap();
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
                         inbound.settings = settings;
                     }
                     inbounds.push(inbound);
@@ -805,7 +845,9 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                         if let Some(ext_password) = &ext_settings.password {
                             settings.password = ext_password.clone();
                         }
-                        let settings = settings.write_to_bytes().unwrap();
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
                         inbound.settings = settings;
                     }
                     inbounds.push(inbound);
@@ -821,7 +863,9 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                                 settings.passwords.push(ext_pass.clone());
                             }
                         }
-                        let settings = settings.write_to_bytes().unwrap();
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
                         inbound.settings = settings;
                     }
                     inbounds.push(inbound);
@@ -840,7 +884,9 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                                 settings.path = "/".to_string();
                             }
                         };
-                        let settings = settings.write_to_bytes().unwrap();
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
                         inbound.settings = settings;
                     }
                     inbounds.push(inbound);
@@ -856,7 +902,9 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                                 settings.actors.push(ext_actor.clone());
                             }
                         }
-                        let settings = settings.write_to_bytes().unwrap();
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
                         inbound.settings = settings;
                     }
                     inbounds.push(inbound);
@@ -882,7 +930,9 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                                 settings.alpn.push(ext_alpn.clone());
                             }
                         }
-                        let settings = settings.write_to_bytes().unwrap();
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
                         inbound.settings = settings;
                     }
                     inbounds.push(inbound);
@@ -925,7 +975,9 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                         if let Some(ext_ech_key) = &ext_settings.ech_key {
                             settings.ech_key = ext_ech_key.clone();
                         }
-                        let settings = settings.write_to_bytes().unwrap();
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
                         inbound.settings = settings;
                     }
                     inbounds.push(inbound);
@@ -941,7 +993,9 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                                 settings.actors.push(ext_actor.clone());
                             }
                         }
-                        let settings = settings.write_to_bytes().unwrap();
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
                         inbound.settings = settings;
                     }
                     inbounds.push(inbound);
@@ -952,7 +1006,9 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                     inbound.protocol = "mptp".to_string();
                     if let Some(_ext_settings) = ext_settings {
                         let settings = internal::MptpInboundSettings::new();
-                        let settings = settings.write_to_bytes().unwrap();
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
                         inbound.settings = settings;
                     }
                     inbounds.push(inbound);
@@ -989,7 +1045,9 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                         if let Some(ext_port) = ext_settings.port {
                             settings.port = ext_port as u32;
                         }
-                        let settings = settings.write_to_bytes().unwrap();
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
                         outbound.settings = settings;
                     }
                     outbounds.push(outbound);
@@ -1012,7 +1070,9 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                         if let Some(ext_password) = &ext_settings.password {
                             settings.password = ext_password.clone();
                         }
-                        let settings = settings.write_to_bytes().unwrap();
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
                         outbound.settings = settings;
                     }
                     outbounds.push(outbound);
@@ -1040,7 +1100,9 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                         if let Some(ext_prefix) = &ext_settings.prefix {
                             settings.prefix = Some(ext_prefix.clone());
                         }
-                        let settings = settings.write_to_bytes().unwrap();
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
                         outbound.settings = settings;
                     }
                     outbounds.push(outbound);
@@ -1060,7 +1122,9 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                         if let Some(ext_path) = &ext_settings.path {
                             settings.path = ext_path.clone();
                         }
-                        let settings = settings.write_to_bytes().unwrap();
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
                         outbound.settings = settings;
                     }
                     outbounds.push(outbound);
@@ -1080,7 +1144,9 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                         if let Some(ext_password) = &ext_settings.password {
                             settings.password = ext_password.clone();
                         }
-                        let settings = settings.write_to_bytes().unwrap();
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
                         outbound.settings = settings;
                     }
                     outbounds.push(outbound);
@@ -1104,7 +1170,9 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                             .security
                             .clone()
                             .unwrap_or_else(|| "chacha20-ietf-poly1305".to_string());
-                        let settings = settings.write_to_bytes().unwrap();
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
                         outbound.settings = settings;
                     }
                     outbounds.push(outbound);
@@ -1124,7 +1192,9 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                         if let Some(ext_uuid) = &ext_settings.uuid {
                             settings.uuid = ext_uuid.clone();
                         }
-                        let settings = settings.write_to_bytes().unwrap();
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
                         outbound.settings = settings;
                     }
                     outbounds.push(outbound);
@@ -1144,7 +1214,9 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                         if let Some(ext_short_id) = &ext_settings.short_id {
                             settings.short_id = ext_short_id.clone();
                         }
-                        let settings = settings.write_to_bytes().unwrap();
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
                         outbound.settings = settings;
                     }
                     outbounds.push(outbound);
@@ -1192,7 +1264,9 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                         if let Some(ext_ech_config_list) = &ext_settings.ech_config_list {
                             settings.ech_config_list = ext_ech_config_list.clone();
                         }
-                        let settings = settings.write_to_bytes().unwrap();
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
                         outbound.settings = settings;
                     }
                     outbounds.push(outbound);
@@ -1209,7 +1283,9 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                         if let Some(ext_headers) = &ext_settings.headers {
                             settings.headers = ext_headers.clone();
                         }
-                        let settings = settings.write_to_bytes().unwrap();
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
                         outbound.settings = settings;
                     }
                     outbounds.push(outbound);
@@ -1230,7 +1306,9 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                         } else {
                             settings.delay_base = 0;
                         }
-                        let settings = settings.write_to_bytes().unwrap();
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
                         outbound.settings = settings;
                     }
                     outbounds.push(outbound);
@@ -1251,7 +1329,9 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                         } else {
                             settings.method = "random".to_string();
                         }
-                        let settings = settings.write_to_bytes().unwrap();
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
                         outbound.settings = settings;
                     }
                     outbounds.push(outbound);
@@ -1292,7 +1372,9 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                         settings.cache_size = ext_settings.cache_size.unwrap_or(256);
                         settings.cache_timeout = ext_settings.cache_timeout.unwrap_or(60); // 60 mins
                         settings.last_resort = ext_settings.last_resort.clone();
-                        let settings = settings.write_to_bytes().unwrap();
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
                         outbound.settings = settings;
                     }
                     outbounds.push(outbound);
@@ -1318,7 +1400,9 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                         settings.concurrency = ext_settings.concurrency.unwrap_or(2);
                         settings.max_recv_bytes = ext_settings.max_recv_bytes.unwrap_or_default();
                         settings.max_lifetime = ext_settings.max_lifetime.unwrap_or_default();
-                        let settings = settings.write_to_bytes().unwrap();
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
                         outbound.settings = settings;
                     }
                     outbounds.push(outbound);
@@ -1351,7 +1435,9 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                         if let Some(ext_alpns) = &ext_settings.alpn {
                             settings.alpn = ext_alpns.clone();
                         }
-                        let settings = settings.write_to_bytes().unwrap();
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
                         outbound.settings = settings;
                     }
                     outbounds.push(outbound);
@@ -1367,7 +1453,9 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                                 settings.actors.push(ext_actor.clone());
                             }
                         }
-                        let settings = settings.write_to_bytes().unwrap();
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
                         outbound.settings = settings;
                     }
                     outbounds.push(outbound);
@@ -1389,7 +1477,9 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                         if let Some(ext_port) = ext_settings.port {
                             settings.port = ext_port as u32;
                         }
-                        let settings = settings.write_to_bytes().unwrap();
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
                         outbound.settings = settings;
                     }
                     outbounds.push(outbound);
@@ -1405,7 +1495,9 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                                 settings.actors.push(ext_actor.clone());
                             }
                         }
-                        let settings = settings.write_to_bytes().unwrap();
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
                         outbound.settings = settings;
                     }
                     outbounds.push(outbound);
@@ -1422,7 +1514,9 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                         if let Some(ext_args) = &ext_settings.args {
                             settings.args = ext_args.clone();
                         }
-                        let settings = settings.write_to_bytes().unwrap();
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
                         outbound.settings = settings;
                     }
                     outbounds.push(outbound);
@@ -1532,6 +1626,14 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                 if let Some(ext_process_names) = ext_rule.process_name.as_mut() {
                     for process_name in ext_process_names.drain(0..) {
                         rule.process_names.push(process_name);
+                    }
+                }
+                #[cfg(not(feature = "rule-process-name"))]
+                if let Some(ext_process_names) = ext_rule.process_name.as_ref() {
+                    if !ext_process_names.is_empty() {
+                        tracing::warn!(
+                            "router rule `process_name` is ignored: build without the `rule-process-name` feature"
+                        );
                     }
                 }
                 rules.push(rule);

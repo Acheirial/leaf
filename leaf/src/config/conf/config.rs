@@ -1002,6 +1002,16 @@ pub fn to_common(conf: &Config) -> Result<common::Config> {
         };
         common_config.log = Some(log);
 
+        if ext_general.dns_interface.is_some() {
+            tracing::warn!("conf option `dns-interface` has no effect and is ignored");
+        }
+        if ext_general.api_interface.is_some() {
+            tracing::warn!("conf option `api-interface` has no effect and is ignored");
+        }
+        if ext_general.api_port.is_some() {
+            tracing::warn!("conf option `api-port` has no effect and is ignored");
+        }
+
         let mut inbounds = Vec::new();
 
         if let (Some(interface), Some(port)) = (
