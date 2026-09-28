@@ -7,7 +7,7 @@ use futures::future::{abortable, AbortHandle};
 use futures::FutureExt;
 use tokio::sync::{Mutex, Notify};
 use tokio::time::Instant;
-use tracing::{debug, trace};
+use tracing::{debug, trace, warn};
 
 use crate::{app::SyncDnsClient, proxy::*, session::*};
 
@@ -32,6 +32,7 @@ impl Handler {
         health_check: bool,
         check_interval: u32,
         failover: bool,
+        fallback_cache: bool,
         last_resort: Option<AnyOutboundHandler>,
         health_check_timeout: u32,
         health_check_delay: u32,
@@ -43,6 +44,9 @@ impl Handler {
         health_check_success_percentage: u32,
         dns_client: SyncDnsClient,
     ) -> (Self, Vec<AbortHandle>) {
+        if fallback_cache {
+            warn!("fallback_cache is not supported for UDP and will be ignored");
+        }
         let mut abort_handles = Vec::new();
         let schedule = Arc::new(Mutex::new((0..actors.len()).collect()));
         let last_active = Arc::new(Mutex::new(Instant::now()));

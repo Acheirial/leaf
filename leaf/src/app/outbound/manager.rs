@@ -80,6 +80,44 @@ struct HandlerCacheEntry<'a> {
     settings: &'a Vec<u8>,
 }
 
+/// Resolve a group outbound's actor tags against the handlers loaded so far.
+///
+/// Returns `None` if any referenced actor is missing, in which case the whole
+/// group must be skipped (`continue 'outbounds`). An empty tag list resolves to
+/// an empty actor list: the amux outbound dials its configured address itself
+/// and only uses actors when it is chained behind them.
+fn resolve_actors(
+    tags: &[String],
+    handlers: &HashMap<String, AnyOutboundHandler>,
+) -> Option<Vec<AnyOutboundHandler>> {
+    let mut actors = Vec::with_capacity(tags.len());
+    for tag in tags {
+        match handlers.get(tag) {
+            Some(handler) => actors.push(handler.clone()),
+            None => return None,
+        }
+    }
+    Some(actors)
+}
+
+/// Like [`resolve_actors`], but also rejects an empty actor list. Groups that
+/// delegate to their actors cannot do anything without at least one.
+fn resolve_nonempty_actors(
+    tags: &[String],
+    handlers: &HashMap<String, AnyOutboundHandler>,
+) -> Option<Vec<AnyOutboundHandler>> {
+    resolve_actors(tags, handlers).filter(|actors| !actors.is_empty())
+}
+
+/// Log a group outbound as having been added, using its configured actor tags.
+fn log_added_handler(tag: &str, actor_tags: &[String]) {
+    trace!(
+        "added handler [{}] with actors: {}",
+        tag,
+        actor_tags.join(",")
+    );
+}
+
 impl OutboundManager {
     #[allow(clippy::type_complexity)]
     fn load_handlers(
@@ -414,17 +452,10 @@ impl OutboundManager {
                                 .map_err(|e| {
                                     anyhow!("invalid [{}] outbound settings: {}", &tag, e)
                                 })?;
-                        let mut actors = Vec::new();
-                        for actor in settings.actors.iter() {
-                            if let Some(a) = handlers.get(actor) {
-                                actors.push(a.clone());
-                            } else {
-                                continue 'outbounds;
-                            }
-                        }
-                        if actors.is_empty() {
-                            continue;
-                        }
+                        let actors = match resolve_nonempty_actors(&settings.actors, handlers) {
+                            Some(actors) => actors,
+                            None => continue 'outbounds,
+                        };
                         let stream = Arc::new(tryall::StreamHandler {
                             actors: actors.clone(),
                             delay_base: settings.delay_base,
@@ -441,11 +472,7 @@ impl OutboundManager {
                             .datagram_handler(datagram)
                             .build();
                         handlers.insert(tag.clone(), handler);
-                        trace!(
-                            "added handler [{}] with actors: {}",
-                            &tag,
-                            settings.actors.join(",")
-                        );
+                        log_added_handler(&tag, &settings.actors);
                     }
                     #[cfg(feature = "outbound-static")]
                     "static" => {
@@ -454,17 +481,10 @@ impl OutboundManager {
                                 .map_err(|e| {
                                     anyhow!("invalid [{}] outbound settings: {}", &tag, e)
                                 })?;
-                        let mut actors = Vec::new();
-                        for actor in settings.actors.iter() {
-                            if let Some(a) = handlers.get(actor) {
-                                actors.push(a.clone());
-                            } else {
-                                continue 'outbounds;
-                            }
-                        }
-                        if actors.is_empty() {
-                            continue;
-                        }
+                        let actors = match resolve_nonempty_actors(&settings.actors, handlers) {
+                            Some(actors) => actors,
+                            None => continue 'outbounds,
+                        };
                         let stream = Arc::new(r#static::StreamHandler::new(
                             actors.clone(),
                             &settings.method,
@@ -477,11 +497,7 @@ impl OutboundManager {
                             .datagram_handler(datagram)
                             .build();
                         handlers.insert(tag.clone(), handler);
-                        trace!(
-                            "added handler [{}] with actors: {}",
-                            &tag,
-                            settings.actors.join(",")
-                        );
+                        log_added_handler(&tag, &settings.actors);
                     }
                     #[cfg(feature = "outbound-failover")]
                     "failover" => {
@@ -490,17 +506,10 @@ impl OutboundManager {
                                 .map_err(|e| {
                                     anyhow!("invalid [{}] outbound settings: {}", &tag, e)
                                 })?;
-                        let mut actors = Vec::new();
-                        for actor in settings.actors.iter() {
-                            if let Some(a) = handlers.get(actor) {
-                                actors.push(a.clone());
-                            } else {
-                                continue 'outbounds;
-                            }
-                        }
-                        if actors.is_empty() {
-                            continue;
-                        }
+                        let actors = match resolve_nonempty_actors(&settings.actors, handlers) {
+                            Some(actors) => actors,
+                            None => continue 'outbounds,
+                        };
                         let last_resort =
                             if let Some(last_resort_tag) = settings.last_resort.as_ref() {
                                 handlers.get(last_resort_tag).cloned()
@@ -533,6 +542,7 @@ impl OutboundManager {
                             settings.health_check,
                             settings.check_interval,
                             settings.failover,
+                            settings.fallback_cache,
                             last_resort,
                             settings.health_check_timeout,
                             settings.health_check_delay,
@@ -552,11 +562,7 @@ impl OutboundManager {
                         handlers.insert(tag.clone(), handler);
                         abort_handles.append(&mut stream_abort_handles);
                         abort_handles.append(&mut datagram_abort_handles);
-                        trace!(
-                            "added handler [{}] with actors: {}",
-                            &tag,
-                            settings.actors.join(",")
-                        );
+                        log_added_handler(&tag, &settings.actors);
                     }
                     #[cfg(feature = "outbound-amux")]
                     "amux" => {
@@ -565,14 +571,10 @@ impl OutboundManager {
                                 .map_err(|e| {
                                     anyhow!("invalid [{}] outbound settings: {}", &tag, e)
                                 })?;
-                        let mut actors = Vec::new();
-                        for actor in settings.actors.iter() {
-                            if let Some(a) = handlers.get(actor) {
-                                actors.push(a.clone());
-                            } else {
-                                continue 'outbounds;
-                            }
-                        }
+                        let actors = match resolve_actors(&settings.actors, handlers) {
+                            Some(actors) => actors,
+                            None => continue 'outbounds,
+                        };
                         let (stream, mut stream_abort_handles) = amux::outbound::StreamHandler::new(
                             settings.address.clone(),
                             settings.port as u16,
@@ -589,11 +591,7 @@ impl OutboundManager {
                             .build();
                         handlers.insert(tag.clone(), handler);
                         abort_handles.append(&mut stream_abort_handles);
-                        trace!(
-                            "added handler [{}] with actors: {}",
-                            &tag,
-                            settings.actors.join(",")
-                        );
+                        log_added_handler(&tag, &settings.actors);
                     }
                     #[cfg(feature = "outbound-chain")]
                     "chain" => {
@@ -602,17 +600,10 @@ impl OutboundManager {
                                 .map_err(|e| {
                                     anyhow!("invalid [{}] outbound settings: {}", &tag, e)
                                 })?;
-                        let mut actors = Vec::new();
-                        for actor in settings.actors.iter() {
-                            if let Some(a) = handlers.get(actor) {
-                                actors.push(a.clone());
-                            } else {
-                                continue 'outbounds;
-                            }
-                        }
-                        if actors.is_empty() {
-                            continue;
-                        }
+                        let actors = match resolve_nonempty_actors(&settings.actors, handlers) {
+                            Some(actors) => actors,
+                            None => continue 'outbounds,
+                        };
                         let stream = Arc::new(chain::outbound::StreamHandler {
                             actors: actors.clone(),
                         });
@@ -625,11 +616,7 @@ impl OutboundManager {
                             .datagram_handler(datagram)
                             .build();
                         handlers.insert(tag.clone(), handler);
-                        trace!(
-                            "added handler [{}] with actors: {}",
-                            &tag,
-                            settings.actors.join(",")
-                        );
+                        log_added_handler(&tag, &settings.actors);
                     }
                     #[cfg(feature = "outbound-mptp")]
                     "mptp" => {
@@ -638,17 +625,10 @@ impl OutboundManager {
                                 .map_err(|e| {
                                     anyhow!("invalid [{}] outbound settings: {}", &tag, e)
                                 })?;
-                        let mut actors = Vec::new();
-                        for actor in settings.actors.iter() {
-                            if let Some(a) = handlers.get(actor) {
-                                actors.push(a.clone());
-                            } else {
-                                continue 'outbounds;
-                            }
-                        }
-                        if actors.is_empty() {
-                            continue;
-                        }
+                        let actors = match resolve_nonempty_actors(&settings.actors, handlers) {
+                            Some(actors) => actors,
+                            None => continue 'outbounds,
+                        };
                         let stream = Arc::new(mptp::outbound::stream::Handler {
                             actors: actors.clone(),
                             address: settings.address.clone(),
@@ -661,11 +641,7 @@ impl OutboundManager {
                             .datagram_handler(stream)
                             .build();
                         handlers.insert(tag.clone(), handler);
-                        trace!(
-                            "added handler [{}] with actors: {}",
-                            &tag,
-                            settings.actors.join(",")
-                        );
+                        log_added_handler(&tag, &settings.actors);
                     }
                     #[cfg(feature = "plugin")]
                     "plugin" => {
@@ -733,17 +709,10 @@ impl OutboundManager {
                                 .map_err(|e| {
                                     anyhow!("invalid [{}] outbound settings: {}", &tag, e)
                                 })?;
-                        let mut actors = Vec::new();
-                        for actor in settings.actors.iter() {
-                            if let Some(a) = handlers.get(actor) {
-                                actors.push(a.clone());
-                            } else {
-                                continue 'outbounds;
-                            }
-                        }
-                        if actors.is_empty() {
-                            continue;
-                        }
+                        let actors = match resolve_nonempty_actors(&settings.actors, handlers) {
+                            Some(actors) => actors,
+                            None => continue 'outbounds,
+                        };
 
                         let actors_tags: Vec<String> =
                             actors.iter().map(|x| x.tag().to_owned()).collect();
@@ -778,11 +747,7 @@ impl OutboundManager {
                             .datagram_handler(datagram)
                             .build();
                         handlers.insert(tag.clone(), handler);
-                        trace!(
-                            "added handler [{}] with actors: {}",
-                            &tag,
-                            settings.actors.join(",")
-                        );
+                        log_added_handler(&tag, &settings.actors);
                     }
                     _ => continue,
                 }
