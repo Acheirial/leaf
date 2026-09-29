@@ -226,10 +226,16 @@ async fn read_masquerade_file(path: &Path, uri_path: &str) -> io::Result<(&'stat
         if full.is_dir() {
             full = full.join("index.html");
         }
-        let data = tokio::fs::read(&full).await?;
+        let read_path = full.clone();
+        let data = tokio::task::spawn_blocking(move || std::fs::read(read_path))
+            .await
+            .map_err(io::Error::other)??;
         Ok((content_type_of(&full), data))
     } else {
-        let data = tokio::fs::read(path).await?;
+        let read_path = path.to_path_buf();
+        let data = tokio::task::spawn_blocking(move || std::fs::read(read_path))
+            .await
+            .map_err(io::Error::other)??;
         Ok((content_type_of(path), data))
     }
 }

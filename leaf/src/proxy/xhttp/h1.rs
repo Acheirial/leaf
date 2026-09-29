@@ -477,7 +477,10 @@ impl<W: Unpin> ChunkedWriter<W> {
         }
     }
 
-    fn flush_pending(s: &mut Self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+    fn flush_pending(s: &mut Self, cx: &mut Context<'_>) -> Poll<io::Result<()>>
+    where
+        W: AsyncWrite,
+    {
         while !s.pending.is_empty() {
             let n = ready!(Pin::new(&mut s.inner).poll_write(cx, &s.pending))?;
             if n == 0 {
