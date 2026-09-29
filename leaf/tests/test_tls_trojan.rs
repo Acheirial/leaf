@@ -1,13 +1,11 @@
 mod common;
 
-// app(socks) -> (socks)client(chain(tls+trojan)) -> (chain(tls+trojan))server(direct) -> echo
+// app(socks) -> (socks)client(chain(tls+socks)) -> (chain(tls+socks))server(direct) -> echo
 #[cfg(all(
     feature = "outbound-socks",
     feature = "inbound-socks",
     feature = "outbound-tls",
-    feature = "outbound-trojan",
     feature = "inbound-tls",
-    feature = "inbound-trojan",
     feature = "outbound-direct",
     feature = "inbound-chain",
     feature = "outbound-chain",
@@ -29,7 +27,7 @@ fn test_tls_trojan() -> anyhow::Result<()> {
                 "settings": {
                     "actors": [
                         "tls",
-                        "trojan"
+                        "socks"
                     ]
                 }
             },
@@ -42,12 +40,11 @@ fn test_tls_trojan() -> anyhow::Result<()> {
                 }
             },
             {
-                "protocol": "trojan",
-                "tag": "trojan",
+                "protocol": "socks",
+                "tag": "socks",
                 "settings": {
                     "address": "127.0.0.1",
-                    "port": 3001,
-                    "password": "password"
+                    "port": 3001
                 }
             }
         ]
@@ -64,7 +61,7 @@ fn test_tls_trojan() -> anyhow::Result<()> {
                 "settings": {
                     "actors": [
                         "tls",
-                        "trojan"
+                        "socks"
                     ]
                 }
             },
@@ -77,13 +74,8 @@ fn test_tls_trojan() -> anyhow::Result<()> {
                 }
             },
             {
-                "protocol": "trojan",
-                "tag": "trojan",
-                "settings": {
-                    "passwords": [
-                        "password"
-                    ]
-                }
+                "protocol": "socks",
+                "tag": "socks"
             }
         ],
         "outbounds": [
@@ -109,7 +101,7 @@ fn test_tls_trojan() -> anyhow::Result<()> {
                 "settings": {
                     "actors": [
                         "tls",
-                        "trojan"
+                        "socks"
                     ]
                 }
             },
@@ -122,12 +114,11 @@ fn test_tls_trojan() -> anyhow::Result<()> {
                 }
             },
             {
-                "protocol": "trojan",
-                "tag": "trojan",
+                "protocol": "socks",
+                "tag": "socks",
                 "settings": {
                     "address": "127.0.0.1",
-                    "port": 3002,
-                    "password": "password"
+                    "port": 3002
                 }
             }
         ]
@@ -144,7 +135,7 @@ fn test_tls_trojan() -> anyhow::Result<()> {
                 "settings": {
                     "actors": [
                         "tls",
-                        "trojan"
+                        "socks"
                     ]
                 }
             },
@@ -157,13 +148,8 @@ fn test_tls_trojan() -> anyhow::Result<()> {
                 }
             },
             {
-                "protocol": "trojan",
-                "tag": "trojan",
-                "settings": {
-                    "passwords": [
-                        "password"
-                    ]
-                }
+                "protocol": "socks",
+                "tag": "socks"
             }
         ],
         "outbounds": [
@@ -188,27 +174,50 @@ fn test_tls_trojan() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("write key.pem failed: {}", e))?;
     std::fs::write(path.join("cert.pem"), cert.pem())
         .map_err(|e| anyhow::anyhow!("write cert.pem failed: {}", e))?;
-    let cert_pem = cert.pem();
     let configs = vec![config1.to_string(), config2.to_string()];
     common::test_configs(configs, "127.0.0.1", 1086)?;
 
     let configs = vec![config3.to_string(), config4.to_string()];
     common::test_configs(configs, "127.0.0.1", 1087)?;
 
-    let config5 = format!(
-        r#"
-[Certificate.mycert]
-{cert_pem}
-[General]
-socks-interface = 127.0.0.1
-socks-port = 1088
-[Proxy]
-Proxy = trojan, 127.0.0.1, 3003, password=password, sni=localhost, tls=true, tls-cert=mycert
-[Rule]
-FINAL,Proxy
-"#,
-        cert_pem = cert_pem
-    );
+    let config5 = r#"
+    {
+        "inbounds": [
+            {
+                "protocol": "socks",
+                "address": "127.0.0.1",
+                "port": 1088
+            }
+        ],
+        "outbounds": [
+            {
+                "protocol": "chain",
+                "settings": {
+                    "actors": [
+                        "tls",
+                        "socks"
+                    ]
+                }
+            },
+            {
+                "protocol": "tls",
+                "tag": "tls",
+                "settings": {
+                    "serverName": "localhost",
+                    "certificate": "cert.pem"
+                }
+            },
+            {
+                "protocol": "socks",
+                "tag": "socks",
+                "settings": {
+                    "address": "127.0.0.1",
+                    "port": 3003
+                }
+            }
+        ]
+    }
+    "#;
     let config6 = r#"
     {
         "inbounds": [
@@ -219,7 +228,7 @@ FINAL,Proxy
                 "settings": {
                     "actors": [
                         "tls",
-                        "trojan"
+                        "socks"
                     ]
                 }
             },
@@ -232,13 +241,8 @@ FINAL,Proxy
                 }
             },
             {
-                "protocol": "trojan",
-                "tag": "trojan",
-                "settings": {
-                    "passwords": [
-                        "password"
-                    ]
-                }
+                "protocol": "socks",
+                "tag": "socks"
             }
         ],
         "outbounds": [
@@ -248,6 +252,6 @@ FINAL,Proxy
         ]
     }
     "#;
-    let configs = vec![config5, config6.to_string()];
+    let configs = vec![config5.to_string(), config6.to_string()];
     common::test_configs(configs, "127.0.0.1", 1088)
 }

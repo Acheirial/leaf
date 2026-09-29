@@ -56,8 +56,6 @@ pub mod hc;
 pub mod http;
 #[cfg(any(feature = "inbound-mptp", feature = "outbound-mptp"))]
 pub mod mptp;
-#[cfg(all(feature = "inbound-nf", windows))]
-pub mod nf;
 #[cfg(feature = "outbound-obfs")]
 pub mod obfs;
 #[cfg(any(feature = "inbound-quic", feature = "outbound-quic"))]
@@ -68,7 +66,7 @@ pub mod reality;
 pub mod redirect;
 #[cfg(feature = "outbound-select")]
 pub mod select;
-#[cfg(any(feature = "inbound-shadowsocks", feature = "outbound-shadowsocks"))]
+#[cfg(feature = "outbound-shadowsocks")]
 pub mod shadowsocks;
 #[cfg(any(feature = "inbound-socks", feature = "outbound-socks"))]
 pub mod socks;
@@ -76,7 +74,7 @@ pub mod socks;
 pub mod r#static;
 #[cfg(feature = "outbound-tls")]
 pub mod tls;
-#[cfg(any(feature = "inbound-trojan", feature = "outbound-trojan"))]
+#[cfg(feature = "outbound-trojan")]
 pub mod trojan;
 #[cfg(feature = "outbound-tryall")]
 pub mod tryall;

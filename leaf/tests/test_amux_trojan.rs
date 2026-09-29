@@ -1,13 +1,11 @@
 mod common;
 
-// app(socks) -> (socks)client(chain(amux(tcp)+trojan)) -> (chain(amux(tcp)+trojan))server(direct) -> echo
+// app(socks) -> (socks)client(chain(amux(tcp)+socks)) -> (chain(amux(tcp)+socks))server(direct) -> echo
 #[cfg(all(
     feature = "outbound-socks",
     feature = "inbound-socks",
     feature = "outbound-amux",
-    feature = "outbound-trojan",
     feature = "inbound-amux",
-    feature = "inbound-trojan",
     feature = "outbound-direct",
     feature = "inbound-chain",
     feature = "outbound-chain",
@@ -29,7 +27,7 @@ fn test_amux_trojan() -> anyhow::Result<()> {
                 "settings": {
                     "actors": [
                         "amux",
-                        "trojan"
+                        "socks"
                     ]
                 }
             },
@@ -42,11 +40,8 @@ fn test_amux_trojan() -> anyhow::Result<()> {
                 }
             },
             {
-                "protocol": "trojan",
-                "tag": "trojan",
-                "settings": {
-                    "password": "password"
-                }
+                "protocol": "socks",
+                "tag": "socks"
             }
         ]
     }
@@ -62,7 +57,7 @@ fn test_amux_trojan() -> anyhow::Result<()> {
                 "settings": {
                     "actors": [
                         "amux",
-                        "trojan"
+                        "socks"
                     ]
                 }
             },
@@ -71,13 +66,8 @@ fn test_amux_trojan() -> anyhow::Result<()> {
                 "tag": "amux"
             },
             {
-                "protocol": "trojan",
-                "tag": "trojan",
-                "settings": {
-                    "passwords": [
-                        "password"
-                    ]
-                }
+                "protocol": "socks",
+                "tag": "socks"
             }
         ],
         "outbounds": [

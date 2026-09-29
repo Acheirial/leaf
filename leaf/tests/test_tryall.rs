@@ -1,11 +1,9 @@
 mod common;
 
-// app(socks) -> (socks)client(tryall(shadowsocks)) -> (shadowsocks)server(direct) -> echo
+// app(socks) -> (socks)client(tryall(socks)) -> (socks)server(direct) -> echo
 #[cfg(all(
     feature = "outbound-socks",
     feature = "inbound-socks",
-    feature = "outbound-shadowsocks",
-    feature = "inbound-shadowsocks",
     feature = "outbound-direct",
     feature = "outbound-tryall",
 ))]
@@ -25,18 +23,16 @@ fn test_tryall() -> anyhow::Result<()> {
                 "protocol": "tryall",
                 "settings": {
                     "actors": [
-                        "ss_out"
+                        "socks_out"
                     ]
                 }
             },
             {
-                "protocol": "shadowsocks",
-                "tag": "ss_out",
+                "protocol": "socks",
+                "tag": "socks_out",
                 "settings": {
                     "address": "127.0.0.1",
-                    "port": 3001,
-                    "method": "chacha20-ietf-poly1305",
-                    "password": "password"
+                    "port": 3001
                 }
             }
         ]
@@ -47,13 +43,9 @@ fn test_tryall() -> anyhow::Result<()> {
     {
         "inbounds": [
             {
-                "protocol": "shadowsocks",
+                "protocol": "socks",
                 "address": "127.0.0.1",
-                "port": 3001,
-                "settings": {
-                    "method": "chacha20-ietf-poly1305",
-                    "password": "password"
-                }
+                "port": 3001
             }
         ],
         "outbounds": [

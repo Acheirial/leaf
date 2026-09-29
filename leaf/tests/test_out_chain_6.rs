@@ -1,15 +1,11 @@
 mod common;
 
-// app(socks) -> (socks)client(chain(ws+trojan+shadowsocks)) -> (chain(ws+trojan))server1(direct) -> (shadowsocks)server2(direct) -> echo
+// app(socks) -> (socks)client(chain(ws+socks+socks)) -> (chain(ws+socks))server1(direct) -> (socks)server2(direct) -> echo
 #[cfg(all(
     feature = "outbound-socks",
     feature = "inbound-socks",
     feature = "outbound-ws",
-    feature = "outbound-trojan",
     feature = "inbound-ws",
-    feature = "inbound-trojan",
-    feature = "outbound-shadowsocks",
-    feature = "inbound-shadowsocks",
     feature = "outbound-direct",
     feature = "inbound-chain",
     feature = "outbound-chain",
@@ -32,7 +28,7 @@ fn test_out_chain_6() -> anyhow::Result<()> {
                 "settings": {
                     "actors": [
                         "server1-ws",
-                        "server1-trojan",
+                        "server1-socks",
                         "server2"
                     ]
                 }
@@ -45,22 +41,19 @@ fn test_out_chain_6() -> anyhow::Result<()> {
                 }
             },
             {
-                "protocol": "trojan",
-                "tag": "server1-trojan",
+                "protocol": "socks",
+                "tag": "server1-socks",
                 "settings": {
                     "address": "127.0.0.1",
-                    "port": 3001,
-                    "password": "password"
+                    "port": 3001
                 }
             },
             {
-                "protocol": "shadowsocks",
+                "protocol": "socks",
                 "tag": "server2",
                 "settings": {
                     "address": "127.0.0.1",
-                    "port": 3002,
-                    "method": "aes-128-gcm",
-                    "password": "password"
+                    "port": 3002
                 }
             }
         ]
@@ -78,7 +71,7 @@ fn test_out_chain_6() -> anyhow::Result<()> {
                 "settings": {
                     "actors": [
                         "ws",
-                        "trojan"
+                        "socks"
                     ]
                 }
             },
@@ -90,13 +83,8 @@ fn test_out_chain_6() -> anyhow::Result<()> {
                 }
             },
             {
-                "protocol": "trojan",
-                "tag": "trojan",
-                "settings": {
-                    "passwords": [
-                        "password"
-                    ]
-                }
+                "protocol": "socks",
+                "tag": "socks"
             }
         ],
         "outbounds": [
@@ -111,13 +99,9 @@ fn test_out_chain_6() -> anyhow::Result<()> {
     {
         "inbounds": [
             {
-                "protocol": "shadowsocks",
+                "protocol": "socks",
                 "address": "127.0.0.1",
-                "port": 3002,
-                "settings": {
-                    "method": "aes-128-gcm",
-                    "password": "password"
-                }
+                "port": 3002
             }
         ],
         "outbounds": [

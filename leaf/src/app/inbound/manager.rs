@@ -19,18 +19,12 @@ use crate::proxy::hc;
 use crate::proxy::http;
 #[cfg(feature = "inbound-mptp")]
 use crate::proxy::mptp;
-#[cfg(all(feature = "inbound-nf", windows))]
-use crate::proxy::nf;
 #[cfg(feature = "inbound-quic")]
 use crate::proxy::quic;
-#[cfg(feature = "inbound-shadowsocks")]
-use crate::proxy::shadowsocks;
 #[cfg(feature = "inbound-socks")]
 use crate::proxy::socks;
 #[cfg(feature = "inbound-tls")]
 use crate::proxy::tls;
-#[cfg(feature = "inbound-trojan")]
-use crate::proxy::trojan;
 #[cfg(feature = "inbound-ws")]
 use crate::proxy::ws;
 
@@ -124,70 +118,6 @@ impl InboundManager {
                         settings.path,
                         settings.request,
                         settings.response,
-                    ));
-                    let handler = Arc::new(proxy::inbound::Handler::new(
-                        tag.clone(),
-                        Some(stream),
-                        None,
-                    ));
-                    handlers.insert(tag.clone(), handler);
-                }
-                #[cfg(all(feature = "inbound-nf", windows))]
-                "nf" => {
-                    let settings: crate::config::NfInboundSettings =
-                        protobuf::Message::parse_from_bytes(&inbound.settings)?;
-                    use crate::app::fake_dns::{FakeDns, FakeDnsMode};
-                    let fake_dns_exclude = settings.fake_dns_exclude.clone();
-                    let fake_dns_include = settings.fake_dns_include.clone();
-                    let (mode, filters) = if !fake_dns_include.is_empty() {
-                        (FakeDnsMode::Include, fake_dns_include)
-                    } else {
-                        (FakeDnsMode::Exclude, fake_dns_exclude)
-                    };
-                    let fake_dns = Arc::new(FakeDns::new(mode, filters));
-                    let manager = Arc::new(nf::inbound::NfManager::new(
-                        settings.driver_name.clone(),
-                        settings.nfapi.clone(),
-                        fake_dns,
-                    )?);
-                    let stream = Arc::new(nf::inbound::StreamHandler {
-                        manager: manager.clone(),
-                    });
-                    let datagram = Arc::new(nf::inbound::DatagramHandler { manager });
-                    let handler = Arc::new(crate::proxy::inbound::Handler::new(
-                        tag.clone(),
-                        Some(stream),
-                        Some(datagram),
-                    ));
-                    handlers.insert(tag.clone(), handler);
-                }
-                #[cfg(feature = "inbound-shadowsocks")]
-                "shadowsocks" => {
-                    let settings =
-                        config::ShadowsocksInboundSettings::parse_from_bytes(&inbound.settings)
-                            .map_err(|e| anyhow!("invalid [{}] inbound settings: {}", &tag, e))?;
-                    let stream = Arc::new(shadowsocks::inbound::StreamHandler {
-                        cipher: settings.method.clone(),
-                        password: settings.password.clone(),
-                    });
-                    let datagram = Arc::new(shadowsocks::inbound::DatagramHandler {
-                        cipher: settings.method.clone(),
-                        password: settings.password.clone(),
-                    });
-                    let handler = Arc::new(proxy::inbound::Handler::new(
-                        tag.clone(),
-                        Some(stream),
-                        Some(datagram),
-                    ));
-                    handlers.insert(tag.clone(), handler);
-                }
-                #[cfg(feature = "inbound-trojan")]
-                "trojan" => {
-                    let settings =
-                        config::TrojanInboundSettings::parse_from_bytes(&inbound.settings)
-                            .map_err(|e| anyhow!("invalid [{}] inbound settings: {}", &tag, e))?;
-                    let stream = Arc::new(trojan::inbound::StreamHandler::new(
-                        settings.passwords.to_vec(),
                     ));
                     let handler = Arc::new(proxy::inbound::Handler::new(
                         tag.clone(),

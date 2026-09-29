@@ -1,15 +1,11 @@
 mod common;
 
-// app(socks) -> (socks)client(chain(chain(ws+trojan)+shadowsocks+chain(ws+trojan))) -> (chain(ws+trojan))server1(direct) -> (shadowsocks)server2(direct) -> (chain(ws+trojan))server3(direct) -> echo
+// app(socks) -> (socks)client(chain(chain(ws+socks)+socks+chain(ws+socks))) -> (chain(ws+socks))server1(direct) -> (socks)server2(direct) -> (chain(ws+socks))server3(direct) -> echo
 #[cfg(all(
     feature = "outbound-socks",
     feature = "inbound-socks",
     feature = "outbound-ws",
-    feature = "outbound-trojan",
     feature = "inbound-ws",
-    feature = "inbound-trojan",
-    feature = "outbound-shadowsocks",
-    feature = "inbound-shadowsocks",
     feature = "outbound-direct",
     feature = "inbound-chain",
     feature = "outbound-chain",
@@ -43,7 +39,7 @@ fn test_out_chain_7() -> anyhow::Result<()> {
                 "settings": {
                     "actors": [
                         "server1-ws",
-                        "server1-trojan"
+                        "server1-socks"
                     ]
                 }
             },
@@ -55,22 +51,19 @@ fn test_out_chain_7() -> anyhow::Result<()> {
                 }
             },
             {
-                "protocol": "trojan",
-                "tag": "server1-trojan",
+                "protocol": "socks",
+                "tag": "server1-socks",
                 "settings": {
                     "address": "127.0.0.1",
-                    "port": 3001,
-                    "password": "password"
+                    "port": 3001
                 }
             },
             {
-                "protocol": "shadowsocks",
+                "protocol": "socks",
                 "tag": "server2",
                 "settings": {
                     "address": "127.0.0.1",
-                    "port": 3002,
-                    "method": "aes-128-gcm",
-                    "password": "password"
+                    "port": 3002
                 }
             },
             {
@@ -79,7 +72,7 @@ fn test_out_chain_7() -> anyhow::Result<()> {
                 "settings": {
                     "actors": [
                         "server3-ws",
-                        "server3-trojan"
+                        "server3-socks"
                     ]
                 }
             },
@@ -91,12 +84,11 @@ fn test_out_chain_7() -> anyhow::Result<()> {
                 }
             },
             {
-                "protocol": "trojan",
-                "tag": "server3-trojan",
+                "protocol": "socks",
+                "tag": "server3-socks",
                 "settings": {
                     "address": "127.0.0.1",
-                    "port": 3003,
-                    "password": "password"
+                    "port": 3003
                 }
             }
         ]
@@ -114,7 +106,7 @@ fn test_out_chain_7() -> anyhow::Result<()> {
                 "settings": {
                     "actors": [
                         "ws",
-                        "trojan"
+                        "socks"
                     ]
                 }
             },
@@ -126,13 +118,8 @@ fn test_out_chain_7() -> anyhow::Result<()> {
                 }
             },
             {
-                "protocol": "trojan",
-                "tag": "trojan",
-                "settings": {
-                    "passwords": [
-                        "password"
-                    ]
-                }
+                "protocol": "socks",
+                "tag": "socks"
             }
         ],
         "outbounds": [
@@ -147,13 +134,9 @@ fn test_out_chain_7() -> anyhow::Result<()> {
     {
         "inbounds": [
             {
-                "protocol": "shadowsocks",
+                "protocol": "socks",
                 "address": "127.0.0.1",
-                "port": 3002,
-                "settings": {
-                    "method": "aes-128-gcm",
-                    "password": "password"
-                }
+                "port": 3002
             }
         ],
         "outbounds": [
@@ -175,7 +158,7 @@ fn test_out_chain_7() -> anyhow::Result<()> {
                 "settings": {
                     "actors": [
                         "ws",
-                        "trojan"
+                        "socks"
                     ]
                 }
             },
@@ -187,13 +170,8 @@ fn test_out_chain_7() -> anyhow::Result<()> {
                 }
             },
             {
-                "protocol": "trojan",
-                "tag": "trojan",
-                "settings": {
-                    "passwords": [
-                        "password"
-                    ]
-                }
+                "protocol": "socks",
+                "tag": "socks"
             }
         ],
         "outbounds": [

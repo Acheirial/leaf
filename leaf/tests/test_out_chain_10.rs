@@ -1,20 +1,16 @@
 mod common;
 
-// app(socks) -> (socks)client(chain(chain(amux(ws)+trojan)+shadowsocks)) -> (chain(amux(ws)+trojan))server1(direct) -> (shadowsocks)server2(direct) -> echo
+// app(socks) -> (socks)client(chain(chain(amux(ws)+socks)+socks)) -> (chain(amux(ws)+socks))server1(direct) -> (socks)server2(direct) -> echo
 #[cfg(all(
     feature = "outbound-socks",
     feature = "inbound-socks",
     feature = "outbound-amux",
     feature = "outbound-ws",
-    feature = "outbound-trojan",
     feature = "inbound-amux",
     feature = "inbound-ws",
-    feature = "inbound-trojan",
     feature = "outbound-direct",
     feature = "inbound-chain",
     feature = "outbound-chain",
-    feature = "inbound-shadowsocks",
-    feature = "outbound-shadowsocks",
 ))]
 #[test]
 fn test_out_chain_10() -> anyhow::Result<()> {
@@ -33,18 +29,18 @@ fn test_out_chain_10() -> anyhow::Result<()> {
                 "tag": "out",
                 "settings": {
                     "actors": [
-                        "chain-amux-ws-trojan",
-                        "shadowsocks"
+                        "chain-amux-ws-socks",
+                        "socks2"
                     ]
                 }
             },
             {
                 "protocol": "chain",
-                "tag": "chain-amux-ws-trojan",
+                "tag": "chain-amux-ws-socks",
                 "settings": {
                     "actors": [
                         "amux",
-                        "trojan"
+                        "socks"
                     ]
                 }
             },
@@ -69,20 +65,15 @@ fn test_out_chain_10() -> anyhow::Result<()> {
                 }
             },
             {
-                "protocol": "trojan",
-                "tag": "trojan",
-                "settings": {
-                    "password": "password"
-                }
+                "protocol": "socks",
+                "tag": "socks"
             },
             {
-                "protocol": "shadowsocks",
-                "tag": "shadowsocks",
+                "protocol": "socks",
+                "tag": "socks2",
                 "settings": {
                     "address": "127.0.0.1",
-                    "port": 3002,
-                    "method": "chacha20-ietf-poly1305",
-                    "password": "password"
+                    "port": 3002
                 }
             }
         ]
@@ -100,7 +91,7 @@ fn test_out_chain_10() -> anyhow::Result<()> {
                 "settings": {
                     "actors": [
                         "amux",
-                        "trojan"
+                        "socks"
                     ]
                 }
             },
@@ -121,13 +112,8 @@ fn test_out_chain_10() -> anyhow::Result<()> {
                 }
             },
             {
-                "protocol": "trojan",
-                "tag": "trojan",
-                "settings": {
-                    "passwords": [
-                        "password"
-                    ]
-                }
+                "protocol": "socks",
+                "tag": "socks"
             }
         ],
         "outbounds": [
@@ -142,13 +128,9 @@ fn test_out_chain_10() -> anyhow::Result<()> {
     {
         "inbounds": [
             {
-                "protocol": "shadowsocks",
+                "protocol": "socks",
                 "address": "127.0.0.1",
-                "port": 3002,
-                "settings": {
-                    "method": "chacha20-ietf-poly1305",
-                    "password": "password"
-                }
+                "port": 3002
             }
         ],
         "outbounds": [

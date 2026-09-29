@@ -60,11 +60,9 @@ all-endpoints = [
     "inbound-quic",
     "inbound-ws",
     "inbound-tls",
-    "inbound-trojan",
     "inbound-mptp",
     "inbound-http",
     "inbound-hc",
-    "inbound-shadowsocks",
     "inbound-socks",
     "inbound-tun",
     "inbound-cat",
@@ -130,9 +128,7 @@ outbound-select = ["directories", "axum/query"]
 outbound-vmess = ["lz_fnv", "cfb-mode", "hmac", "sha2", "aes", "aes-gcm", "sha3", "digest", "md-5", "tokio-util", "byteorder", "crc32fast"]
 
 # Inbounds
-inbound-trojan = ["sha2", "hex"]
 inbound-mptp = []
-inbound-shadowsocks = ["hkdf", "sha-1", "md-5", "tokio-util"]
 inbound-socks = []
 inbound-http = ["http"]
 inbound-hc = []
@@ -143,7 +139,6 @@ inbound-quic = ["rustls"]
 inbound-tls = []
 inbound-chain = []
 inbound-cat = ["tokio/io-std"]
-inbound-nf = ["libloading"]
 
 plugin = ["async-ffi", "libloading"]
 api = ["axum"]
@@ -268,8 +263,8 @@ notify = { version = "6", optional = true }
 
 # TUN
 tun = { version = "0.7", features = ["async"], optional = true  }
-netstack-lwip = { git = "https://github.com/eycorsican/netstack-lwip", rev = "4943435", optional = true }
-netstack-smoltcp = { git = "https://github.com/eycorsican/netstack-smoltcp", branch = "pr-16-initialize-unfilled", optional = true }
+netstack-lwip = { git = "https://github.com/Acheirial/netstack-lwip", rev = "bad84d50d262b2c592e9839b6048422d242956f0", optional = true }
+netstack-smoltcp = { git = "https://github.com/Acheirial/netstack-smoltcp", rev = "1068d9d7bf733484f2672e75b4064c0def472bc8", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 ipconfig = "0.3"

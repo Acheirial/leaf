@@ -20,18 +20,11 @@ pub struct Tun {
 }
 
 #[derive(Debug, Default)]
-pub struct Nf {
-    pub driver_name: String,
-    pub nfapi: Option<String>,
-}
-
-#[derive(Debug, Default)]
 pub struct General {
     pub tun: Option<Tun>,
     pub tun_fd: Option<i32>,
     pub tun_auto: Option<bool>,
     pub tun2socks_backend: Option<String>,
-    pub nf: Option<Nf>,
     pub loglevel: Option<String>,
     pub logoutput: Option<String>,
     pub logformat: Option<String>,
@@ -504,21 +497,6 @@ pub fn from_lines(lines: Vec<io::Result<String>>) -> Result<Config> {
             }
             "tun2socks-backend" => {
                 general.tun2socks_backend = Some(parts[1].to_string());
-            }
-            "nf" => {
-                // nf = driver_name, path/to/nfapi.dll
-                if let Some(items) = get_char_sep_slice(parts[1], ',') {
-                    let nfapi = if items.len() >= 2 {
-                        Some(items[1].trim().to_owned())
-                    } else {
-                        None
-                    };
-                    let nf = Nf {
-                        driver_name: items[0].trim().to_owned(),
-                        nfapi,
-                    };
-                    general.nf = Some(nf);
-                }
             }
             "loglevel" => {
                 general.loglevel = Some(parts[1].to_string());
@@ -1035,23 +1013,6 @@ pub fn to_common(conf: &Config) -> Result<common::Config> {
                 address: Some(interface.clone()),
                 port: Some(*port),
                 settings: common::InboundSettings::Socks { settings: None },
-            });
-        }
-
-        if let Some(nf) = &ext_general.nf {
-            inbounds.push(common::Inbound {
-                tag: Some("nf".to_string()),
-                address: Some("127.0.0.1".to_string()),
-                port: Some(0),
-                settings: common::InboundSettings::Nf {
-                    settings: Some(common::NfInboundSettings {
-                        driver_name: nf.driver_name.clone(),
-                        nfapi: nf.nfapi.clone(),
-                        fake_dns_exclude: ext_general.always_real_ip.clone(),
-                        fake_dns_include: ext_general.always_fake_ip.clone(),
-                        tun2socks: None,
-                    }),
-                },
             });
         }
 

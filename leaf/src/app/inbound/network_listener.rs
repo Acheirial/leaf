@@ -18,22 +18,6 @@ use crate::proxy::*;
 use crate::session::{Network, Session, SocksAddr};
 use crate::Runner;
 
-#[cfg(feature = "inbound-nf")]
-lazy_static::lazy_static! {
-    pub static ref TCP_LISTENING_ADDRESSES: std::sync::RwLock<std::collections::HashMap<String, SocketAddr>> =
-        std::sync::RwLock::new(std::collections::HashMap::new());
-    pub static ref UDP_LISTENING_ADDRESSES: std::sync::RwLock<std::collections::HashMap<String, SocketAddr>> =
-        std::sync::RwLock::new(std::collections::HashMap::new());
-}
-
-#[cfg(feature = "inbound-nf")]
-pub fn get_network_listen_addr(tag: &str, kind: Network) -> Option<SocketAddr> {
-    match kind {
-        Network::Tcp => TCP_LISTENING_ADDRESSES.read().unwrap().get(tag).copied(),
-        Network::Udp => UDP_LISTENING_ADDRESSES.read().unwrap().get(tag).copied(),
-    }
-}
-
 // Handle an inbound datagram, which is similar to a UDP socket, managed by NAT
 // manager.
 async fn handle_inbound_datagram(
@@ -222,14 +206,6 @@ async fn handle_tcp_listen(
     let listen_addr = listener.io().local_addr()?;
     info!("listening tcp {}", &listen_addr);
 
-    #[cfg(feature = "inbound-nf")]
-    {
-        TCP_LISTENING_ADDRESSES
-            .write()
-            .unwrap()
-            .insert(handler.tag().clone(), listen_addr);
-    }
-
     loop {
         let (stream, _) = listener.accept().await?;
         let handler_cloned = handler.clone();
@@ -261,14 +237,6 @@ async fn handle_udp_listen(
     let socket = UdpSocket::bind(&listen_addr).await?;
     let listen_addr = socket.local_addr()?;
     info!("listening udp {}", &listen_addr);
-
-    #[cfg(feature = "inbound-nf")]
-    {
-        UDP_LISTENING_ADDRESSES
-            .write()
-            .unwrap()
-            .insert(handler.tag().clone(), listen_addr);
-    }
 
     // Transforms the UDP socket into an inbound transport.
     let transport = handler

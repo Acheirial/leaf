@@ -1,9 +1,3 @@
-[build.env]
-passthrough = [
-    "CFG_COMMIT_HASH",
-    "CFG_COMMIT_DATE",
-]
-
 [target.x86_64-pc-windows-gnu]
 image = "ghcr.io/cross-rs/x86_64-pc-windows-gnu:main"
 # mingw's `malloc.h` includes `mm_malloc.h`, which is a header the compiler is

@@ -1,13 +1,11 @@
 mod common;
 
-// app(socks) -> (socks)client(chain(ws+trojan)) -> (chain(ws+trojan))server(direct) -> echo
+// app(socks) -> (socks)client(chain(ws+socks)) -> (chain(ws+socks))server(direct) -> echo
 #[cfg(all(
     feature = "outbound-socks",
     feature = "inbound-socks",
     feature = "outbound-ws",
-    feature = "outbound-trojan",
     feature = "inbound-ws",
-    feature = "inbound-trojan",
     feature = "outbound-direct",
     feature = "inbound-chain",
     feature = "outbound-chain",
@@ -32,7 +30,7 @@ fn test_ws_trojan() -> anyhow::Result<()> {
                 "settings": {
                     "actors": [
                         "ws",
-                        "trojan"
+                        "socks"
                     ]
                 }
             },
@@ -44,12 +42,11 @@ fn test_ws_trojan() -> anyhow::Result<()> {
                 }
             },
             {
-                "protocol": "trojan",
-                "tag": "trojan",
+                "protocol": "socks",
+                "tag": "socks",
                 "settings": {
                     "address": "127.0.0.1",
-                    "port": 3001,
-                    "password": "password"
+                    "port": 3001
                 }
             }
         ]
@@ -69,7 +66,7 @@ fn test_ws_trojan() -> anyhow::Result<()> {
                 "settings": {
                     "actors": [
                         "ws",
-                        "trojan"
+                        "socks"
                     ]
                 }
             },
@@ -81,13 +78,8 @@ fn test_ws_trojan() -> anyhow::Result<()> {
                 }
             },
             {
-                "protocol": "trojan",
-                "tag": "trojan",
-                "settings": {
-                    "passwords": [
-                        "password"
-                    ]
-                }
+                "protocol": "socks",
+                "tag": "socks"
             }
         ],
         "outbounds": [

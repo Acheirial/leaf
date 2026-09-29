@@ -84,23 +84,36 @@ MptpOutTag = mptp, actor1, actor2, actor3, address=1.2.3.4, port=10000
 
 ## Running
 
-Build:
+This repository ships the core library only (`leaf`); build it and embed it in your own binary:
 
 ```bash
-cargo build -p leaf-cli --release
+cargo build -p leaf --release
 ```
 
-Run server:
+```rust
+use leaf::{start, Config, RuntimeOption, StartOptions};
 
-```bash
-./target/release/leaf -c server.json
+fn main() -> Result<(), leaf::Error> {
+    // Optional: validate the config before startup.
+    leaf::test_config("client.json")?;
+
+    start(
+        0,
+        StartOptions {
+            config: Config::File("client.json".to_string()),
+            #[cfg(feature = "auto-reload")]
+            auto_reload: false,
+            runtime_opt: RuntimeOption::SingleThread,
+        },
+    )?;
+
+    // Call `leaf::reload(0)` to re-read the config, `leaf::shutdown(0)` to stop.
+    std::thread::park();
+    Ok(())
+}
 ```
 
-Run client:
-
-```bash
-./target/release/leaf -c client.json
-```
+Start one process with `server.json` (or a second runtime id in the same process) and another with `client.json`.
 
 ## Validation
 
@@ -111,12 +124,7 @@ Run client:
 curl --socks5 127.0.0.1:1086 https://example.com
 ```
 
-3. Verify configuration syntax before production startup:
-
-```bash
-./target/release/leaf -c client.json -T
-./target/release/leaf -c server.json -T
-```
+3. Verify configuration syntax before production startup with `leaf::test_config(path)` (see above).
 
 ## Notes
 

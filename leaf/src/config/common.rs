@@ -28,35 +28,10 @@ pub struct CatInboundSettings {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct NfInboundSettings {
-    #[serde(rename = "driverName", alias = "driver_name")]
-    pub driver_name: String,
-    pub nfapi: Option<String>,
-    #[serde(rename = "fakeDnsExclude", alias = "fake_dns_exclude")]
-    pub fake_dns_exclude: Option<Vec<String>>,
-    #[serde(rename = "fakeDnsInclude", alias = "fake_dns_include")]
-    pub fake_dns_include: Option<Vec<String>>,
-    pub tun2socks: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct SocksInboundSettings {
     pub username: Option<String>,
     pub password: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(deny_unknown_fields)]
-pub struct ShadowsocksInboundSettings {
-    pub method: Option<String>,
-    pub password: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(deny_unknown_fields)]
-pub struct TrojanInboundSettings {
-    pub passwords: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -344,18 +319,6 @@ pub enum InboundSettings {
     Cat {
         #[serde(default)]
         settings: Option<CatInboundSettings>,
-    },
-    Nf {
-        #[serde(default)]
-        settings: Option<NfInboundSettings>,
-    },
-    Shadowsocks {
-        #[serde(default)]
-        settings: Option<ShadowsocksInboundSettings>,
-    },
-    Trojan {
-        #[serde(default)]
-        settings: Option<TrojanInboundSettings>,
     },
     #[serde(rename = "websocket", alias = "ws")]
     WebSocket {
@@ -749,49 +712,6 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                     }
                     inbounds.push(inbound);
                 }
-                InboundSettings::Nf {
-                    settings: ext_settings,
-                } => {
-                    inbound.protocol = "nf".to_string();
-                    if let Some(ext_settings) = ext_settings {
-                        let mut settings = internal::NfInboundSettings::new();
-                        let mut fake_dns_exclude = Vec::new();
-                        if let Some(ext_excludes) = &ext_settings.fake_dns_exclude {
-                            for ext_exclude in ext_excludes {
-                                fake_dns_exclude.push(ext_exclude.clone());
-                            }
-                        }
-                        if !fake_dns_exclude.is_empty() {
-                            settings.fake_dns_exclude = fake_dns_exclude;
-                        }
-
-                        let mut fake_dns_include = Vec::new();
-                        if let Some(ext_includes) = &ext_settings.fake_dns_include {
-                            for ext_include in ext_includes {
-                                fake_dns_include.push(ext_include.clone());
-                            }
-                        }
-                        if !fake_dns_include.is_empty() {
-                            settings.fake_dns_include = fake_dns_include;
-                        }
-
-                        settings.driver_name = ext_settings.driver_name.clone();
-                        settings.nfapi = ext_settings
-                            .nfapi
-                            .clone()
-                            .unwrap_or("nfapi.dll".to_string());
-                        if ext_settings.tun2socks.is_some() {
-                            tracing::warn!(
-                                "nf inbound setting `tun2socks` has no effect and is ignored"
-                            );
-                        }
-                        let settings = settings
-                            .write_to_bytes()
-                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
-                        inbound.settings = settings;
-                    }
-                    inbounds.push(inbound);
-                }
                 InboundSettings::Hc {
                     settings: ext_settings,
                 } => {
@@ -829,45 +749,6 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                 }
                 InboundSettings::Http => {
                     inbound.protocol = "http".to_string();
-                    inbounds.push(inbound);
-                }
-                InboundSettings::Shadowsocks {
-                    settings: ext_settings,
-                } => {
-                    inbound.protocol = "shadowsocks".to_string();
-                    if let Some(ext_settings) = ext_settings {
-                        let mut settings = internal::ShadowsocksInboundSettings::new();
-                        if let Some(ext_method) = &ext_settings.method {
-                            settings.method = ext_method.clone();
-                        } else {
-                            settings.method = "chacha20-ietf-poly1305".to_string();
-                        }
-                        if let Some(ext_password) = &ext_settings.password {
-                            settings.password = ext_password.clone();
-                        }
-                        let settings = settings
-                            .write_to_bytes()
-                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
-                        inbound.settings = settings;
-                    }
-                    inbounds.push(inbound);
-                }
-                InboundSettings::Trojan {
-                    settings: ext_settings,
-                } => {
-                    inbound.protocol = "trojan".to_string();
-                    if let Some(ext_settings) = ext_settings {
-                        let mut settings = internal::TrojanInboundSettings::new();
-                        if let Some(ext_passwords) = &ext_settings.passwords {
-                            for ext_pass in ext_passwords {
-                                settings.passwords.push(ext_pass.clone());
-                            }
-                        }
-                        let settings = settings
-                            .write_to_bytes()
-                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
-                        inbound.settings = settings;
-                    }
                     inbounds.push(inbound);
                 }
                 InboundSettings::WebSocket {

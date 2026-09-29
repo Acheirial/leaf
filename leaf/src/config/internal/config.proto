@@ -63,28 +63,12 @@ message SocksInboundSettings {
 	string password = 2;
 }
 
-message ShadowsocksInboundSettings {
-	string method = 1;
-	string password = 2;
-}
-
-message TrojanInboundSettings {
-	repeated string passwords = 1;
-}
-
 message WebSocketInboundSettings {
 	string path = 1;
 }
 
 message AMuxInboundSettings {
 	repeated string actors = 1;
-}
-
-message NfInboundSettings {
-  string driver_name = 1;
-	string nfapi = 2;
-	repeated string fake_dns_exclude = 3;
-	repeated string fake_dns_include = 4;
 }
 
 message QuicInboundSettings {

@@ -221,9 +221,9 @@ pub fn test_tcp_half_close_on_configs(
         //
         // Ensure both directions work.
         //
-        // When testing with proxy protocols need additional info from the other
-        // side to initialize itself, such as shadowsocks needs a salt from the
-        // other side, we must forward some payload first.
+        // When testing with proxy protocols that need additional info from the
+        // other side to initialize themselves, we must forward some payload
+        // first.
         client_stream
             .write_all(b"hello")
             .await
@@ -318,9 +318,9 @@ pub fn test_tcp_half_close_on_configs(
         //
         // Ensure both directions work.
         //
-        // When testing with proxy protocols need additional info from the other
-        // side to initialize itself, such as shadowsocks needs a salt from the
-        // other side, we must forward some payload first.
+        // When testing with proxy protocols that need additional info from the
+        // other side to initialize themselves, we must forward some payload
+        // first.
         client_stream
             .write_all(b"hello")
             .await

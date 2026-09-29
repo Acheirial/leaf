@@ -1,13 +1,11 @@
 mod common;
 
-// app(socks) -> (socks)client(chain(quic+trojan)) -> (chain(quic+trojan))server(direct) -> echo
+// app(socks) -> (socks)client(chain(quic+socks)) -> (chain(quic+socks))server(direct) -> echo
 #[cfg(all(
     feature = "outbound-socks",
     feature = "inbound-socks",
     feature = "outbound-quic",
-    feature = "outbound-trojan",
     feature = "inbound-quic",
-    feature = "inbound-trojan",
     feature = "outbound-direct",
     feature = "inbound-chain",
     feature = "outbound-chain",
@@ -29,7 +27,7 @@ fn test_quic_trojan() -> anyhow::Result<()> {
                 "settings": {
                     "actors": [
                         "quic",
-                        "trojan"
+                        "socks"
                     ]
                 }
             },
@@ -43,16 +41,13 @@ fn test_quic_trojan() -> anyhow::Result<()> {
                     "certificate": "cert.der",
                     "alpn": [
                         "http/1.1",
-                        "trojan"
+                        "socks"
                     ]
                 }
             },
             {
-                "protocol": "trojan",
-                "tag": "trojan",
-                "settings": {
-                    "password": "password"
-                }
+                "protocol": "socks",
+                "tag": "socks"
             }
         ]
     }
@@ -69,7 +64,7 @@ fn test_quic_trojan() -> anyhow::Result<()> {
                 "settings": {
                     "actors": [
                         "quic",
-                        "trojan"
+                        "socks"
                     ]
                 }
             },
@@ -81,18 +76,13 @@ fn test_quic_trojan() -> anyhow::Result<()> {
                     "certificateKey": "key.der",
                     "alpn": [
                         "http/1.1",
-                        "trojan"
+                        "socks"
                     ]
                 }
             },
             {
-                "protocol": "trojan",
-                "tag": "trojan",
-                "settings": {
-                    "passwords": [
-                        "password"
-                    ]
-                }
+                "protocol": "socks",
+                "tag": "socks"
             }
         ],
         "outbounds": [
@@ -118,7 +108,7 @@ fn test_quic_trojan() -> anyhow::Result<()> {
                 "settings": {
                     "actors": [
                         "quic",
-                        "trojan"
+                        "socks"
                     ]
                 }
             },
@@ -133,10 +123,11 @@ fn test_quic_trojan() -> anyhow::Result<()> {
                 }
             },
             {
-                "protocol": "trojan",
-                "tag": "trojan",
+                "protocol": "socks",
+                "tag": "socks",
                 "settings": {
-                    "password": "password"
+                    "address": "127.0.0.1",
+                    "port": 3002
                 }
             }
         ]
@@ -154,7 +145,7 @@ fn test_quic_trojan() -> anyhow::Result<()> {
                 "settings": {
                     "actors": [
                         "quic",
-                        "trojan"
+                        "socks"
                     ]
                 }
             },
@@ -167,13 +158,8 @@ fn test_quic_trojan() -> anyhow::Result<()> {
                 }
             },
             {
-                "protocol": "trojan",
-                "tag": "trojan",
-                "settings": {
-                    "passwords": [
-                        "password"
-                    ]
-                }
+                "protocol": "socks",
+                "tag": "socks"
             }
         ],
         "outbounds": [
@@ -201,7 +187,6 @@ fn test_quic_trojan() -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("write key.pem failed: {}", e))?;
     std::fs::write(&path.join("cert.pem"), &cert.pem())
         .map_err(|e| anyhow::anyhow!("write cert.pem failed: {}", e))?;
-    let cert_pem = cert.pem();
 
     let configs = vec![config1.to_string(), config2.to_string()];
     common::test_configs(configs.clone(), "127.0.0.1", 1086)?;
@@ -211,20 +196,49 @@ fn test_quic_trojan() -> anyhow::Result<()> {
     let configs = vec![config3.to_string(), config4.to_string()];
     common::test_configs(configs.clone(), "127.0.0.1", 1087)?;
 
-    let config5 = format!(
-        r#"
-[Certificate.mycert]
-{cert_pem}
-[General]
-socks-interface = 127.0.0.1
-socks-port = 1089
-[Proxy]
-Proxy = trojan, 127.0.0.1, 3004, password=password, sni=localhost, quic=true, tls-cert=mycert
-[Rule]
-FINAL,Proxy
-"#,
-        cert_pem = cert_pem
-    );
+    let config5 = r#"
+    {
+        "inbounds": [
+            {
+                "protocol": "socks",
+                "address": "127.0.0.1",
+                "port": 1089
+            }
+        ],
+        "outbounds": [
+            {
+                "protocol": "chain",
+                "settings": {
+                    "actors": [
+                        "quic",
+                        "socks"
+                    ]
+                }
+            },
+            {
+                "protocol": "quic",
+                "tag": "quic",
+                "settings": {
+                    "address": "127.0.0.1",
+                    "port": 3004,
+                    "serverName": "localhost",
+                    "certificate": "cert.pem",
+                    "alpn": [
+                        "http/1.1"
+                    ]
+                }
+            },
+            {
+                "protocol": "socks",
+                "tag": "socks",
+                "settings": {
+                    "address": "127.0.0.1",
+                    "port": 3004
+                }
+            }
+        ]
+    }
+    "#;
     let config6 = r#"
     {
         "inbounds": [
@@ -236,7 +250,7 @@ FINAL,Proxy
                 "settings": {
                     "actors": [
                         "quic",
-                        "trojan"
+                        "socks"
                     ]
                 }
             },
@@ -252,13 +266,8 @@ FINAL,Proxy
                 }
             },
             {
-                "protocol": "trojan",
-                "tag": "trojan",
-                "settings": {
-                    "passwords": [
-                        "password"
-                    ]
-                }
+                "protocol": "socks",
+                "tag": "socks"
             }
         ],
         "outbounds": [
@@ -268,6 +277,6 @@ FINAL,Proxy
         ]
     }
     "#;
-    let configs = vec![config5, config6.to_string()];
+    let configs = vec![config5.to_string(), config6.to_string()];
     common::test_configs(configs, "127.0.0.1", 1089)
 }

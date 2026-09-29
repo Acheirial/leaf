@@ -1,15 +1,13 @@
 mod common;
 
-// app(socks) -> (socks)client(chain(chain(amux(ws)+trojan)+trojan)) -> (chain(amux(ws)+trojan))server1(direct) -> (trojan)server2(direct) -> echo
+// app(socks) -> (socks)client(chain(chain(amux(ws)+socks)+socks)) -> (chain(amux(ws)+socks))server1(direct) -> (socks)server2(direct) -> echo
 #[cfg(all(
     feature = "outbound-socks",
     feature = "inbound-socks",
     feature = "outbound-amux",
     feature = "outbound-ws",
-    feature = "outbound-trojan",
     feature = "inbound-amux",
     feature = "inbound-ws",
-    feature = "inbound-trojan",
     feature = "outbound-direct",
     feature = "inbound-chain",
     feature = "outbound-chain",
@@ -31,18 +29,18 @@ fn test_out_chain_9() -> anyhow::Result<()> {
                 "tag": "out",
                 "settings": {
                     "actors": [
-                        "chain-amux-ws-trojan",
-                        "trojan2"
+                        "chain-amux-ws-socks",
+                        "socks2"
                     ]
                 }
             },
             {
                 "protocol": "chain",
-                "tag": "chain-amux-ws-trojan",
+                "tag": "chain-amux-ws-socks",
                 "settings": {
                     "actors": [
                         "amux",
-                        "trojan"
+                        "socks"
                     ]
                 }
             },
@@ -67,19 +65,15 @@ fn test_out_chain_9() -> anyhow::Result<()> {
                 }
             },
             {
-                "protocol": "trojan",
-                "tag": "trojan",
-                "settings": {
-                    "password": "password"
-                }
+                "protocol": "socks",
+                "tag": "socks"
             },
             {
-                "protocol": "trojan",
-                "tag": "trojan2",
+                "protocol": "socks",
+                "tag": "socks2",
                 "settings": {
                     "address": "127.0.0.1",
-                    "port": 3002,
-                    "password": "password"
+                    "port": 3002
                 }
             }
         ]
@@ -97,7 +91,7 @@ fn test_out_chain_9() -> anyhow::Result<()> {
                 "settings": {
                     "actors": [
                         "amux",
-                        "trojan"
+                        "socks"
                     ]
                 }
             },
@@ -118,13 +112,8 @@ fn test_out_chain_9() -> anyhow::Result<()> {
                 }
             },
             {
-                "protocol": "trojan",
-                "tag": "trojan",
-                "settings": {
-                    "passwords": [
-                        "password"
-                    ]
-                }
+                "protocol": "socks",
+                "tag": "socks"
             }
         ],
         "outbounds": [
@@ -139,15 +128,10 @@ fn test_out_chain_9() -> anyhow::Result<()> {
     {
         "inbounds": [
             {
-                "protocol": "trojan",
+                "protocol": "socks",
                 "tag": "in",
                 "address": "127.0.0.1",
-                "port": 3002,
-                "settings": {
-                    "passwords": [
-                        "password"
-                    ]
-                }
+                "port": 3002
             }
         ],
         "outbounds": [

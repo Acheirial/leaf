@@ -7,9 +7,8 @@ jobs:
     strategy:
       matrix:
         os:
-          - macos-latest
           - ubuntu-latest
-            #          - windows-latest
+          - macos-latest
     runs-on: ${{ matrix.os }}
     steps:
       - name: checkout
@@ -25,7 +24,28 @@ jobs:
       - name: test leaf
         run: cargo test -p leaf
 
-  build-cli-cross:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: install rust toolchain
+        uses: hecrj/setup-rust-action@v1
+        with:
+          rust-version: stable
+
+      - name: build leaf
+        run: cargo build -p leaf --release
+
+  build-cross:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -34,7 +54,6 @@ jobs:
           - x86_64-unknown-linux-musl
           - i686-unknown-linux-musl
           - aarch64-unknown-linux-musl
-          - arm-unknown-linux-musleabi
           - armv7-unknown-linux-musleabihf
           - x86_64-pc-windows-gnu
     steps:
@@ -58,115 +77,33 @@ jobs:
 
       - name: build
         run: |
-          export CFG_COMMIT_HASH=`git log --pretty=format:'%h' -n 1`
-          export CFG_COMMIT_DATE=`git log --format="%ci" -n 1`
-          cross build --release --target ${{ matrix.target }}
+          cross build --release -p leaf --target ${{ matrix.target }}
 
-      - name: rename and compress artifacts
-        if: ${{ matrix.target == 'x86_64-pc-windows-gnu' }}
-        run: |
-          mv target/${{ matrix.target }}/release/leaf.exe leaf-${{ matrix.target }}.exe
-
-      - name: rename and compress artifacts
-        if: ${{ matrix.target != 'x86_64-pc-windows-gnu' }}
-        run: |
-          mv target/${{ matrix.target }}/release/leaf leaf-${{ matrix.target }}
-
-      - name: upload assets
-        if: ${{ matrix.target == 'x86_64-pc-windows-gnu' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: leaf-${{ matrix.target }}.exe
-          path: leaf-${{ matrix.target }}.exe
-
-      - name: upload assets
-        if: ${{ matrix.target != 'x86_64-pc-windows-gnu' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: leaf-${{ matrix.target }}
-          path: leaf-${{ matrix.target }}
-
-  build-cli-macos:
-    runs-on: [macos-latest]
+  feature-matrix:
+    runs-on: ubuntu-latest
+    continue-on-error: false
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - aarch64-apple-darwin
-          - x86_64-apple-darwin
+        features:
+          - default-ring
+          - default-openssl
+          - config-json
     steps:
       - name: checkout
         uses: actions/checkout@v4
         with:
           submodules: true
-
-      - name: show last commit
-        run: |
-          git show --summary
 
       - name: install rust toolchain
         uses: hecrj/setup-rust-action@v1
         with:
           rust-version: stable
 
-      - name: install llvm
-        run: |
-          brew install llvm protobuf
+      - name: build leaf with ${{ matrix.features }}
+        run: cargo build -p leaf --no-default-features --features ${{ matrix.features }}
 
-      - name: install target
-        run: |
-          rustup target add ${{ matrix.target }}
-
-      - name: build
-        run: |
-          export CFG_COMMIT_HASH=`git log --pretty=format:'%h' -n 1`
-          export CFG_COMMIT_DATE=`git log --format="%ci" -n 1`
-          cargo build --release --target ${{ matrix.target }} -p leaf-cli
-
-      - name: rename and compress artifacts
-        run: |
-          mv target/${{ matrix.target }}/release/leaf leaf-${{ matrix.target }}
-
-      - name: upload assets
-        uses: actions/upload-artifact@v4
-        with:
-          name: leaf-${{ matrix.target }}
-          path: leaf-${{ matrix.target }}
-
-  build-lib-apple:
-    runs-on: macos-latest
-    steps:
-      - name: checkout
-        uses: actions/checkout@v4
-        with:
-          submodules: true
-
-      - name: install rust
-        uses: hecrj/setup-rust-action@v1
-        with:
-          rust-version: stable
-
-      - name: install toolchain
-        run: |
-          cargo install cbindgen
-          brew install llvm unzip protobuf
-
-      - name: build
-        run: |
-          ./scripts/build_apple_xcframework.sh
-
-      - name: zip artifacts
-        run: |
-          mv target/apple/release/leaf.xcframework .
-          zip -r leaf.xcframework.zip leaf.xcframework
-
-      - name: upload assets
-        uses: actions/upload-artifact@v4
-        with:
-          name: leaf.xcframework.zip
-          path: leaf.xcframework.zip
-
-  build-lib-android:
+  docs:
     runs-on: ubuntu-latest
     steps:
       - name: checkout
@@ -174,39 +111,57 @@ jobs:
         with:
           submodules: true
 
-      - name: install rust
+      - name: install rust toolchain
         uses: hecrj/setup-rust-action@v1
         with:
           rust-version: stable
 
-      - name: install toolchain
-        run: |
-          cargo install cbindgen
-          sudo apt update && sudo apt install -y make llvm-dev libclang-dev clang pkg-config unzip curl default-jdk build-essential
-          export ANDROID_HOME=/tmp/Android/sdk
-          export NDK_HOME=/tmp/Android/sdk/ndk/25.2.9519653
-          export PATH=$ANDROID_HOME/cmdline-tools/bin:$PATH
-          cd /tmp/
-          curl -OL https://dl.google.com/android/repository/commandlinetools-linux-6858069_latest.zip
-          unzip commandlinetools-linux-6858069_latest.zip
-          mkdir -p $ANDROID_HOME
-          mv cmdline-tools $ANDROID_HOME
-          yes | sdkmanager --sdk_root=$ANDROID_HOME --licenses
-          sdkmanager --sdk_root=$ANDROID_HOME "ndk;25.2.9519653" "platforms;android-21"
+      - name: build docs
+        run: cargo doc -p leaf --no-deps
 
-      - name: build
-        run: |
-          export ANDROID_HOME=/tmp/Android/sdk
-          export NDK_HOME=/tmp/Android/sdk/ndk/25.2.9519653
-          ./scripts/build_android.sh
+  proto-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
 
-      - name: zip artifacts
-        run: |
-          mv target/leaf-android-libs .
-          zip -r leaf-android-libs.zip leaf-android-libs
+      - name: install rust toolchain
+        uses: hecrj/setup-rust-action@v1
+        with:
+          rust-version: stable
 
-      - name: upload assets
+      - name: regenerate protobuf bindings
+        run: |
+          touch leaf/build.rs
+          PROTO_GEN=1 cargo build -p leaf || true
+
+      - name: upload regenerated bindings
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: leaf-android-libs.zip
-          path: leaf-android-libs.zip
+          name: config-internal-config-rs
+          path: leaf/src/config/internal/config.rs
+
+      - name: fail when the checked-in bindings are stale
+        run: git diff --exit-code -- leaf/src/config/internal/config.rs
+
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: install rust toolchain
+        uses: hecrj/setup-rust-action@v1
+        with:
+          rust-version: stable
+
+      - name: install rustfmt
+        run: rustup component add rustfmt
+
+      - name: check formatting
+        run: cargo fmt --all -- --check

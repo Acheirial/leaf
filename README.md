@@ -55,9 +55,18 @@ A versatile and efficient proxy framework.
 
 ## Building
 
+This repository contains the core library only (the `leaf` crate).
+
 ```sh
-cargo build -p leaf-cli --release
-./target/release/leaf --help
+cargo build -p leaf --release
+```
+
+## Testing
+
+```sh
+cargo test -p leaf
+# or
+make test
 ```
 
 ## License
