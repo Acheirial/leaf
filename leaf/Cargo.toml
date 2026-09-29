@@ -130,7 +130,7 @@ dns-quic = ["quinn-ring", "rustls"]
 outbound-direct = []
 outbound-drop = []
 outbound-redirect = []
-outbound-shadowsocks = ["hkdf", "sha-1", "md-5", "percent-encoding", "tokio-util"]
+outbound-shadowsocks = ["hkdf", "sha1", "md-5", "percent-encoding", "tokio-util"]
 outbound-obfs = ["base64", "memchr"]
 outbound-socks = ["async-socks5"]
 outbound-trojan = ["sha2", "hex"]
@@ -194,34 +194,34 @@ ctrlc = ["tokio/signal"]
 
 [dependencies]
 # Common
-tokio = { version = "1", features = ["sync", "io-util", "net", "time", "rt", "rt-multi-thread", "macros"] }
+tokio = { version = "1.53.1", features = ["sync", "io-util", "net", "time", "rt", "rt-multi-thread", "macros"] }
 protobuf = "3.6"
 thiserror = "1.0"
-futures = "0.3"
-async-trait = "0.1"
-bytes = "1"
+futures = "0.3.34"
+async-trait = "0.1.92"
+bytes = "1.12.1"
 lazy_static = "1.5"
-anyhow = "1.0"
+anyhow = "1.0.104"
 rand = "0.8"
 socket2 = "0.5"
-async-recursion = "1.1"
-parking_lot = "0.12"
-uuid = { version = "1", features = ["v4"] }
+async-recursion = "1.1.1"
+parking_lot = "0.12.5"
+uuid = { version = "1.26.1", features = ["v4"] }
 
 # DNS
 hickory-proto = { version = "0.24", default-features = false }
 lru = "0.12"
 
 # Logging
-tracing = "0.1"
-tracing-appender = "0.2"
-tracing-subscriber = "0.3"
-chrono = "0.4"
+tracing = "0.1.44"
+tracing-appender = "0.2.5"
+tracing-subscriber = "0.3.23"
+chrono = "0.4.45"
 
 # Router
 maxminddb = { version = "0.24", features = ["mmap"] }
 cidr = "0.2"
-regex = { version = "1.11", optional = true }
+regex = { version = "1.13.1", optional = true }
 
 # outbound-select
 directories = { version = "4.0", optional = true }
@@ -231,37 +231,37 @@ async-ffi = { version = "0.2", optional = true }
 libloading = { version = "0.7", optional = true }
 
 # config-json
-serde_json = { version = "1.0", features = ["raw_value"], optional = true }
-serde_derive = { version = "1.0", optional = true }
-serde = { version = "1.0", optional = true }
+serde_json = { version = "1.0.151", features = ["raw_value"], optional = true }
+serde_derive = { version = "1.0.229", optional = true }
+serde = { version = "1.0.229", optional = true }
 
 # config-yaml
 serde_yaml_ng = { version = "0.10", optional = true }
 
 # config-conf
 
-openssl = { version = "0.10", features = ["vendored"], optional = true }
+openssl = { version = "0.10.81", features = ["vendored"], optional = true }
 
-ring = { version = "0.17", optional = true }
+ring = { version = "0.17.14", optional = true }
 
-aws-lc-rs = { version = "1.16", optional = true }
+aws-lc-rs = { version = "1.18.1", optional = true }
 
 # TLS/rustls/QUIC
-tokio-rustls = { version = "0.26", default-features = false, features = ["logging", "tls12"], optional = true }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["logging", "tls12"], optional = true }
 webpki-roots = { version = "0.26", optional = true }
-rustls-pemfile = { version = "2.1", optional = true }
+rustls-pemfile = { version = "2.2.0", optional = true }
 
 # TLS/openssl
 openssl-probe = { version = "0.1", optional = true }
-tokio-openssl = { version = "0.6", optional = true }
+tokio-openssl = { version = "0.6.5", optional = true }
 
 # WebSocket
 tungstenite = { version = "0.24", default-features = false, optional = true }
 tokio-tungstenite = { version = "0.24", optional = true }
 
 # WebSocket
-url = { version = "2.5", optional = true }
-http = { version = "1.1", optional = true }
+url = { version = "2.5.8", optional = true }
+http = { version = "1.5.0", optional = true }
 
 # SOCKS outbound
 async-socks5 = { version = "0.6", optional = true }
@@ -269,42 +269,42 @@ async-socks5 = { version = "0.6", optional = true }
 # Shadowsocks
 hkdf = { version = "0.12", optional = true }
 md-5 = { version = "0.10", optional = true }
-sha-1 = { version = "0.10", optional = true }
-percent-encoding = { version = "2.3", optional = true }
+sha1 = { version = "0.10.7", optional = true }
+percent-encoding = { version = "2.3.2", optional = true }
 
 # Obfs
 base64 = { version = "0.22", optional = true }
-memchr = { version = "2", optional = true }
+memchr = { version = "2.8.3", optional = true }
 
 # Trojan
 sha2 = { version = "0.10", optional = true }
-hex = { version = "0.4", optional = true }
+hex = { version = "0.4.3", optional = true }
 
 # VMess
-lz_fnv = { version = "0.1", optional = true }
+lz_fnv = { version = "0.1.2", optional = true }
 cfb-mode = { version = "0.8", optional = true }
 hmac = { version = "0.12", optional = true }
 aes = { version = "0.8", optional = true }
 aes-gcm = { version = "0.10", optional = true }
 sha3 = { version = "0.10", optional = true }
 digest = { version = "0.10", optional = true }
-byteorder = { version = "1", optional = true }
-crc32fast = { version = "1", optional = true }
+byteorder = { version = "1.5.0", optional = true }
+crc32fast = { version = "1.5.2", optional = true }
 
 # VLESS encryption (mlkem768x25519plus)
-blake3 = { version = "1.8", optional = true }
-ml-kem = { version = "0.3", optional = true }
+blake3 = { version = "1.8.7", optional = true }
+ml-kem = { version = "0.3.2", optional = true }
 chacha20poly1305 = { version = "0.10", optional = true }
 
 # Failover
-lru_time_cache = { version = "0.11", optional = true }
+lru_time_cache = { version = "0.11.11", optional = true }
 
 # amux
-tokio-util = { version = "0.7", default-features = false, features = ["io", "codec", "compat"], optional = true }
+tokio-util = { version = "0.7.19", default-features = false, features = ["io", "codec", "compat"], optional = true }
 
 # QUIC
-quinn = { version = "0.11", default-features = false, optional = true }
-rustls = { version = "0.23", default-features = false, features = ["std"], optional = true }
+quinn = { version = "0.11.12", default-features = false, optional = true }
+rustls = { version = "0.23.45", default-features = false, features = ["std"], optional = true }
 
 # Hysteria2 (HTTP/3 client for the auth exchange; blake2 for the password hash)
 h3 = { version = "0.0.8", optional = true }
@@ -330,26 +330,25 @@ netstack-lwip = { git = "https://github.com/Acheirial/netstack-lwip", rev = "bad
 netstack-smoltcp = { git = "https://github.com/Acheirial/netstack-smoltcp", rev = "1068d9d7bf733484f2672e75b4064c0def472bc8", optional = true }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-ipconfig = "0.3"
+ipconfig = "0.3.4"
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"
 
 [target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
 pnet_datalink = { version = "0.34", package = "pnet_datalink", optional = true }
-libc = "0.2"
+libc = "0.2.189"
 
 # Used in mobile logger
 [target.'cfg(any(target_os = "ios", target_os = "macos", target_os = "android"))'.dependencies]
-memchr = { version = "2" }
+memchr = { version = "2.8.3" }
 
 [dev-dependencies]
 rcgen = "0.13"
 sha2 = "0.10"
-tokio = { version = "1", features = ["fs", "sync", "io-util", "net", "time", "rt", "rt-multi-thread"] }
+tokio = { version = "1.53.1", features = ["fs", "sync", "io-util", "net", "time", "rt", "rt-multi-thread"] }
 
 [build-dependencies]
-cc = "1.2"
 bindgen = "0.72"
 protobuf-codegen = "=3.6.0"
 protoc-bin-vendored = "3.2"
