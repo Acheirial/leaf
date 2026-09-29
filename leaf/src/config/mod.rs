@@ -14,6 +14,9 @@ pub mod json;
 #[cfg(feature = "config-conf")]
 pub mod conf;
 
+#[cfg(feature = "config-yaml")]
+pub mod yaml;
+
 pub use internal::*;
 
 pub fn from_string(s: &str) -> Result<internal::Config> {
@@ -31,9 +34,24 @@ pub fn from_string(s: &str) -> Result<internal::Config> {
             return Err(anyhow!("json config is not supported by this build"));
         }
     }
+    // A JSON array is valid JSON but never a valid leaf config. Try JSON first
+    // for `[`-prefixed input, yet fall through when it is not JSON, because
+    // clash-style `.conf` files start with a `[Section]` header.
     #[cfg(feature = "config-json")]
     {
-        if let Ok(c) = json::from_string(s) {
+        if s.trim_start().starts_with('[') {
+            if let Ok(c) = json::from_string(s) {
+                return Ok(c);
+            }
+        }
+    }
+    // YAML is the preferred format. `yaml::from_string` only accepts a document
+    // that is a mapping carrying a recognised top-level key, so clash-style
+    // `.conf` text (which parses as YAML) is not silently swallowed here and
+    // still reaches the conf parser below.
+    #[cfg(feature = "config-yaml")]
+    {
+        if let Ok(c) = yaml::from_string(s) {
             return Ok(c);
         }
     }
@@ -49,6 +67,8 @@ pub fn from_file(path: &str) -> Result<internal::Config> {
     if let Some(ext) = Path::new(path).extension() {
         if let Some(ext) = ext.to_str() {
             match ext {
+                #[cfg(feature = "config-yaml")]
+                "yml" | "yaml" => return yaml::from_file(path),
                 #[cfg(feature = "config-json")]
                 "json" => return json::from_file(path),
                 #[cfg(feature = "config-conf")]
@@ -57,5 +77,5 @@ pub fn from_file(path: &str) -> Result<internal::Config> {
             }
         }
     }
-    Err(anyhow!("config files use extension .json or .conf"))
+    Err(anyhow!("config files use extension .yml, .yaml, .json or .conf"))
 }

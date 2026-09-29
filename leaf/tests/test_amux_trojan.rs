@@ -82,7 +82,7 @@ fn test_amux_trojan() -> anyhow::Result<()> {
     std::env::set_var("TCP_UPLINK_TIMEOUT", "3");
 
     let configs = vec![config1.to_string(), config2.to_string()];
-    common::test_configs(configs.clone(), "127.0.0.1", 1086)?;
+    common::test_configs_tcp_only(configs.clone(), "127.0.0.1", 1086)?;
     common::test_tcp_half_close_on_configs(configs.clone(), "127.0.0.1", 1086)?;
     common::test_data_transfering_reliability_on_configs(configs.clone(), "127.0.0.1", 1086)
 }

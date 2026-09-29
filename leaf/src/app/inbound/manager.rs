@@ -25,6 +25,8 @@ use crate::proxy::quic;
 use crate::proxy::socks;
 #[cfg(feature = "inbound-tls")]
 use crate::proxy::tls;
+#[cfg(feature = "inbound-tproxy")]
+use crate::proxy::tproxy;
 #[cfg(feature = "inbound-ws")]
 use crate::proxy::ws;
 
@@ -159,30 +161,24 @@ impl InboundManager {
                 "tls" => {
                     let settings = config::TlsInboundSettings::parse_from_bytes(&inbound.settings)
                         .map_err(|e| anyhow!("invalid [{}] inbound settings: {}", &tag, e))?;
-                    let ech_config = if settings.ech_config.is_empty() {
-                        None
-                    } else {
-                        Some(settings.ech_config.clone())
-                    };
-                    let ech_key = if settings.ech_key.is_empty() {
-                        None
-                    } else {
-                        Some(settings.ech_key.clone())
-                    };
                     let stream = Arc::new(
-                        tls::inbound::StreamHandler::new(
-                            settings.certificate.clone(),
-                            settings.certificate_key.clone(),
-                            ech_config,
-                            ech_key,
-                        )
-                        .map_err(|e| anyhow!("invalid [{}] inbound tls capability: {}", &tag, e))?,
+                        tls::inbound::StreamHandler::new(&settings).map_err(|e| {
+                            anyhow!("invalid [{}] inbound tls capability: {}", &tag, e)
+                        })?,
                     );
                     let handler = Arc::new(proxy::inbound::Handler::new(
                         tag.clone(),
                         Some(stream),
                         None,
                     ));
+                    handlers.insert(tag.clone(), handler);
+                }
+                #[cfg(feature = "inbound-tproxy")]
+                "tproxy" => {
+                    let settings =
+                        config::TproxyInboundSettings::parse_from_bytes(&inbound.settings)
+                            .map_err(|e| anyhow!("invalid [{}] inbound settings: {}", &tag, e))?;
+                    let handler = Arc::new(tproxy::inbound::Handler::new(&settings, &tag));
                     handlers.insert(tag.clone(), handler);
                 }
                 _ => (),

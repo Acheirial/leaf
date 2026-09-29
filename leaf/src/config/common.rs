@@ -7,10 +7,64 @@ use serde_derive::{Deserialize, Serialize};
 
 use crate::config::{external_rule, internal};
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Dns {
-    pub servers: Option<Vec<String>>,
+    pub servers: Option<Vec<DnsServer>>,
     pub hosts: Option<HashMap<String, Vec<String>>>,
+    #[serde(rename = "clientIp", alias = "client_ip")]
+    pub client_ip: Option<String>,
+    pub tag: Option<String>,
+    #[serde(rename = "queryStrategy", alias = "query_strategy")]
+    pub query_strategy: Option<String>,
+    #[serde(rename = "disableCache", alias = "disable_cache")]
+    pub disable_cache: Option<bool>,
+    #[serde(rename = "serveStale", alias = "serve_stale")]
+    pub serve_stale: Option<bool>,
+    #[serde(rename = "serveExpiredTTL", alias = "serve_expired_ttl")]
+    pub serve_expired_ttl: Option<u32>,
+    #[serde(rename = "disableFallback", alias = "disable_fallback")]
+    pub disable_fallback: Option<bool>,
+    #[serde(rename = "disableFallbackIfMatch", alias = "disable_fallback_if_match")]
+    pub disable_fallback_if_match: Option<bool>,
+    #[serde(rename = "enableParallelQuery", alias = "enable_parallel_query")]
+    pub enable_parallel_query: Option<bool>,
+    #[serde(rename = "useSystemHosts", alias = "use_system_hosts")]
+    pub use_system_hosts: Option<bool>,
+}
+
+/// A DNS server entry, which may be configured either as a plain address string
+/// or as an object with per-server options. Xray writes the plain form.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(untagged)]
+pub enum DnsServer {
+    Address(String),
+    Server(DnsServerObject),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct DnsServerObject {
+    pub address: String,
+    pub port: Option<u16>,
+    #[serde(rename = "skipFallback", alias = "skip_fallback")]
+    pub skip_fallback: Option<bool>,
+    pub domains: Option<Vec<String>>,
+    #[serde(rename = "expectedIPs", alias = "expectIPs", alias = "expected_ips")]
+    pub expected_ips: Option<Vec<String>>,
+    #[serde(rename = "unexpectedIPs", alias = "unexpected_ips")]
+    pub unexpected_ips: Option<Vec<String>>,
+    #[serde(rename = "queryStrategy", alias = "query_strategy")]
+    pub query_strategy: Option<String>,
+    pub tag: Option<String>,
+    #[serde(rename = "timeoutMs", alias = "timeout_ms")]
+    pub timeout_ms: Option<u64>,
+    #[serde(rename = "disableCache", alias = "disable_cache")]
+    pub disable_cache: Option<bool>,
+    #[serde(rename = "serveStale", alias = "serve_stale")]
+    pub serve_stale: Option<bool>,
+    #[serde(rename = "serveExpiredTTL", alias = "serve_expired_ttl")]
+    pub serve_expired_ttl: Option<u32>,
+    #[serde(rename = "finalQuery", alias = "final_query")]
+    pub final_query: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -67,6 +121,23 @@ pub struct QuicInboundSettings {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct TlsCertificate {
+    #[serde(rename = "certificateFile", alias = "certificate_file")]
+    pub certificate_file: Option<String>,
+    pub certificate: Option<Vec<String>>,
+    #[serde(rename = "keyFile", alias = "key_file")]
+    pub key_file: Option<String>,
+    pub key: Option<Vec<String>>,
+    pub usage: Option<String>,
+    #[serde(rename = "ocspStapling", alias = "ocsp_stapling")]
+    pub ocsp_stapling: Option<u64>,
+    #[serde(rename = "oneTimeLoading", alias = "one_time_loading")]
+    pub one_time_loading: Option<bool>,
+    #[serde(rename = "buildChain", alias = "build_chain")]
+    pub build_chain: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TlsInboundSettings {
     pub certificate: Option<String>,
     #[serde(rename = "certificateKey", alias = "certificate_key")]
@@ -79,6 +150,17 @@ pub struct TlsInboundSettings {
     pub ech_config: Option<String>,
     #[serde(rename = "echKey", alias = "ech_key")]
     pub ech_key: Option<String>,
+    pub certificates: Option<Vec<TlsCertificate>>,
+    #[serde(rename = "rejectUnknownSni", alias = "reject_unknown_sni")]
+    pub reject_unknown_sni: Option<bool>,
+    #[serde(rename = "echServerKeys", alias = "ech_server_keys")]
+    pub ech_server_keys: Option<String>,
+    #[serde(rename = "minVersion", alias = "min_version")]
+    pub min_version: Option<String>,
+    #[serde(rename = "maxVersion", alias = "max_version")]
+    pub max_version: Option<String>,
+    #[serde(rename = "cipherSuites", alias = "cipher_suites")]
+    pub cipher_suites: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -205,6 +287,26 @@ pub struct TlsOutboundSettings {
     pub ech_disable_dns_lookup: Option<bool>,
     #[serde(rename = "echConfigList", alias = "ech_config_list")]
     pub ech_config_list: Option<String>,
+    pub certificates: Option<Vec<TlsCertificate>>,
+    #[serde(rename = "pinnedPeerCertSha256", alias = "pinned_peer_cert_sha256")]
+    pub pinned_peer_cert_sha256: Option<String>,
+    #[serde(rename = "verifyPeerCertByName", alias = "verify_peer_cert_by_name")]
+    pub verify_peer_cert_by_name: Option<String>,
+    #[serde(rename = "minVersion", alias = "min_version")]
+    pub min_version: Option<String>,
+    #[serde(rename = "maxVersion", alias = "max_version")]
+    pub max_version: Option<String>,
+    #[serde(rename = "cipherSuites", alias = "cipher_suites")]
+    pub cipher_suites: Option<String>,
+    #[serde(rename = "curvePreferences", alias = "curve_preferences")]
+    pub curve_preferences: Option<Vec<String>>,
+    #[serde(rename = "enableSessionResumption", alias = "enable_session_resumption")]
+    pub enable_session_resumption: Option<bool>,
+    #[serde(rename = "disableSystemRoot", alias = "disable_system_root")]
+    pub disable_system_root: Option<bool>,
+    #[serde(rename = "masterKeyLog", alias = "master_key_log")]
+    pub master_key_log: Option<String>,
+    pub fingerprint: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -525,6 +627,88 @@ fn validate_non_empty_str(value: &str, field_name: &str, protocol: &str) -> Resu
         ));
     }
     Ok(())
+}
+
+/// Converts a configured DNS server entry into its internal form, whether it
+/// was given as a bare address string or as an object with options.
+fn dns_server_to_internal(ext: &DnsServer) -> internal::DnsServer {
+    let mut server = internal::DnsServer::new();
+    match ext {
+        DnsServer::Address(address) => {
+            server.address = address.clone();
+        }
+        DnsServer::Server(object) => {
+            server.address = object.address.clone();
+            if let Some(port) = object.port {
+                server.port = Some(port as u32);
+            }
+            if let Some(skip_fallback) = object.skip_fallback {
+                server.skip_fallback = Some(skip_fallback);
+            }
+            if let Some(domains) = &object.domains {
+                server.domains = domains.clone();
+            }
+            if let Some(expected_ips) = &object.expected_ips {
+                server.expected_ips = expected_ips.clone();
+            }
+            if let Some(unexpected_ips) = &object.unexpected_ips {
+                server.unexpected_ips = unexpected_ips.clone();
+            }
+            if let Some(query_strategy) = &object.query_strategy {
+                server.query_strategy = Some(query_strategy.clone());
+            }
+            if let Some(tag) = &object.tag {
+                server.tag = Some(tag.clone());
+            }
+            if let Some(timeout_ms) = object.timeout_ms {
+                server.timeout_ms = Some(timeout_ms);
+            }
+            if let Some(disable_cache) = object.disable_cache {
+                server.disable_cache = Some(disable_cache);
+            }
+            if let Some(serve_stale) = object.serve_stale {
+                server.serve_stale = Some(serve_stale);
+            }
+            if let Some(serve_expired_ttl) = object.serve_expired_ttl {
+                server.serve_expired_ttl = Some(serve_expired_ttl);
+            }
+            if let Some(final_query) = object.final_query {
+                server.final_query = Some(final_query);
+            }
+        }
+    }
+    server
+}
+
+/// Converts a configured TLS certificate into its internal form, resolving the
+/// file forms the same way the flat certificate fields are resolved.
+fn tls_certificate_to_internal(ext: &TlsCertificate) -> internal::TlsCertificate {
+    let mut certificate = internal::TlsCertificate::new();
+    if let Some(certificate_file) = &ext.certificate_file {
+        certificate.certificate_file = Some(resolve_certificate(certificate_file));
+    }
+    if let Some(inline) = &ext.certificate {
+        certificate.certificate = inline.clone();
+    }
+    if let Some(key_file) = &ext.key_file {
+        certificate.key_file = Some(resolve_certificate(key_file));
+    }
+    if let Some(key) = &ext.key {
+        certificate.key = key.clone();
+    }
+    if let Some(usage) = &ext.usage {
+        certificate.usage = Some(usage.clone());
+    }
+    if let Some(ocsp_stapling) = ext.ocsp_stapling {
+        certificate.ocsp_stapling = Some(ocsp_stapling);
+    }
+    if let Some(one_time_loading) = ext.one_time_loading {
+        certificate.one_time_loading = Some(one_time_loading);
+    }
+    if let Some(build_chain) = ext.build_chain {
+        certificate.build_chain = Some(build_chain);
+    }
+    certificate
 }
 
 pub fn to_internal(mut config: Config) -> Result<internal::Config> {
@@ -856,6 +1040,28 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                         if let Some(ext_ech_key) = &ext_settings.ech_key {
                             settings.ech_key = ext_ech_key.clone();
                         }
+                        if let Some(ext_certificates) = &ext_settings.certificates {
+                            for ext_certificate in ext_certificates {
+                                settings
+                                    .certificates
+                                    .push(tls_certificate_to_internal(ext_certificate));
+                            }
+                        }
+                        if let Some(ext_reject_unknown_sni) = ext_settings.reject_unknown_sni {
+                            settings.reject_unknown_sni = Some(ext_reject_unknown_sni);
+                        }
+                        if let Some(ext_ech_server_keys) = &ext_settings.ech_server_keys {
+                            settings.ech_server_keys = Some(ext_ech_server_keys.clone());
+                        }
+                        if let Some(ext_min_version) = &ext_settings.min_version {
+                            settings.min_version = Some(ext_min_version.clone());
+                        }
+                        if let Some(ext_max_version) = &ext_settings.max_version {
+                            settings.max_version = Some(ext_max_version.clone());
+                        }
+                        if let Some(ext_cipher_suites) = &ext_settings.cipher_suites {
+                            settings.cipher_suites = Some(ext_cipher_suites.clone());
+                        }
                         let settings = settings
                             .write_to_bytes()
                             .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
@@ -1144,6 +1350,52 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                         }
                         if let Some(ext_ech_config_list) = &ext_settings.ech_config_list {
                             settings.ech_config_list = ext_ech_config_list.clone();
+                        }
+                        if let Some(ext_certificates) = &ext_settings.certificates {
+                            for ext_certificate in ext_certificates {
+                                settings
+                                    .certificates
+                                    .push(tls_certificate_to_internal(ext_certificate));
+                            }
+                        }
+                        if let Some(ext_pinned_peer_cert_sha256) =
+                            &ext_settings.pinned_peer_cert_sha256
+                        {
+                            settings.pinned_peer_cert_sha256 =
+                                Some(ext_pinned_peer_cert_sha256.clone());
+                        }
+                        if let Some(ext_verify_peer_cert_by_name) =
+                            &ext_settings.verify_peer_cert_by_name
+                        {
+                            settings.verify_peer_cert_by_name =
+                                Some(ext_verify_peer_cert_by_name.clone());
+                        }
+                        if let Some(ext_min_version) = &ext_settings.min_version {
+                            settings.min_version = Some(ext_min_version.clone());
+                        }
+                        if let Some(ext_max_version) = &ext_settings.max_version {
+                            settings.max_version = Some(ext_max_version.clone());
+                        }
+                        if let Some(ext_cipher_suites) = &ext_settings.cipher_suites {
+                            settings.cipher_suites = Some(ext_cipher_suites.clone());
+                        }
+                        if let Some(ext_curve_preferences) = &ext_settings.curve_preferences {
+                            settings.curve_preferences = ext_curve_preferences.clone();
+                        }
+                        if let Some(ext_enable_session_resumption) =
+                            ext_settings.enable_session_resumption
+                        {
+                            settings.enable_session_resumption =
+                                Some(ext_enable_session_resumption);
+                        }
+                        if let Some(ext_disable_system_root) = ext_settings.disable_system_root {
+                            settings.disable_system_root = Some(ext_disable_system_root);
+                        }
+                        if let Some(ext_master_key_log) = &ext_settings.master_key_log {
+                            settings.master_key_log = Some(ext_master_key_log.clone());
+                        }
+                        if let Some(ext_fingerprint) = &ext_settings.fingerprint {
+                            settings.fingerprint = Some(ext_fingerprint.clone());
                         }
                         let settings = settings
                             .write_to_bytes()
@@ -1528,12 +1780,12 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
     }
 
     let mut dns = internal::Dns::new();
-    let mut servers = Vec::new();
+    let mut servers: Vec<internal::DnsServer> = Vec::new();
     let mut hosts = HashMap::new();
     if let Some(ext_dns) = &config.dns {
         if let Some(ext_servers) = ext_dns.servers.as_ref() {
             for ext_server in ext_servers {
-                servers.push(ext_server.to_owned());
+                servers.push(dns_server_to_internal(ext_server));
             }
         }
         if let Some(ext_hosts) = ext_dns.hosts.as_ref() {
@@ -1547,9 +1799,41 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                 hosts.insert(name.to_owned(), ips);
             }
         }
+        if let Some(client_ip) = &ext_dns.client_ip {
+            dns.client_ip = Some(client_ip.clone());
+        }
+        if let Some(tag) = &ext_dns.tag {
+            dns.tag = Some(tag.clone());
+        }
+        if let Some(query_strategy) = &ext_dns.query_strategy {
+            dns.query_strategy = Some(query_strategy.clone());
+        }
+        if let Some(disable_cache) = ext_dns.disable_cache {
+            dns.disable_cache = Some(disable_cache);
+        }
+        if let Some(serve_stale) = ext_dns.serve_stale {
+            dns.serve_stale = Some(serve_stale);
+        }
+        if let Some(serve_expired_ttl) = ext_dns.serve_expired_ttl {
+            dns.serve_expired_ttl = Some(serve_expired_ttl);
+        }
+        if let Some(disable_fallback) = ext_dns.disable_fallback {
+            dns.disable_fallback = Some(disable_fallback);
+        }
+        if let Some(disable_fallback_if_match) = ext_dns.disable_fallback_if_match {
+            dns.disable_fallback_if_match = Some(disable_fallback_if_match);
+        }
+        if let Some(enable_parallel_query) = ext_dns.enable_parallel_query {
+            dns.enable_parallel_query = Some(enable_parallel_query);
+        }
+        if let Some(use_system_hosts) = ext_dns.use_system_hosts {
+            dns.use_system_hosts = Some(use_system_hosts);
+        }
     }
     if servers.is_empty() {
-        servers.push("1.1.1.1".to_string());
+        let mut default_server = internal::DnsServer::new();
+        default_server.address = "1.1.1.1".to_string();
+        servers.push(default_server);
     }
     dns.servers = servers;
     if !hosts.is_empty() {

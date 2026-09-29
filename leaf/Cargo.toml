@@ -21,6 +21,8 @@ default-ring = [
     "rustls-tls",
     "rustls-tls-ring",
     "quinn-ring",
+    "dns-tls",
+    "dns-quic",
     "api",
 ]
 
@@ -31,6 +33,8 @@ default-aws-lc = [
     "rustls-tls",
     "rustls-tls-aws-lc",
     "quinn-aws-lc",
+    "dns-tls",
+    "dns-quic",
     "api",
 ]
 
@@ -40,6 +44,8 @@ default-openssl = [
     "openssl-aead",
     "openssl-tls",
     "quinn-ring",
+    "dns-tls",
+    "dns-quic",
 ]
 
 rustls-tls-aws-lc = ["tokio-rustls/aws_lc_rs", "rustls/aws_lc_rs"]
@@ -52,6 +58,7 @@ quinn-aws-lc = ["quinn/rustls-aws-lc-rs", "quinn/runtime-tokio"]
 all-configs = [
     "config-conf",
     "config-json",
+    "config-yaml",
 ]
 all-endpoints = [
     # inbounds
@@ -66,6 +73,7 @@ all-endpoints = [
     "inbound-socks",
     "inbound-tun",
     "inbound-cat",
+    "inbound-tproxy",
     # outbounds
     "outbound-direct",
     "outbound-drop",
@@ -101,9 +109,14 @@ openssl-tls = ["openssl", "tokio-openssl", "openssl-probe"]
 # Config formats
 config-conf = ["regex"]
 config-json = ["serde", "serde_derive", "serde_json"]
+config-yaml = ["serde", "serde_derive", "serde_yaml_ng"]
 
 # Router rules
 rule-process-name = ["regex"]
+
+# DNS
+dns-tls = ["rustls-tls"]
+dns-quic = ["quinn-ring", "rustls"]
 
 # Outbounds
 outbound-direct = []
@@ -113,7 +126,7 @@ outbound-shadowsocks = ["hkdf", "sha-1", "md-5", "percent-encoding", "tokio-util
 outbound-obfs = ["base64", "memchr"]
 outbound-socks = ["async-socks5"]
 outbound-trojan = ["sha2", "hex"]
-outbound-tls = []
+outbound-tls = ["sha2", "hex"]
 outbound-ws = ["tungstenite", "tokio-tungstenite", "url", "http"]
 outbound-failover = ["lru_time_cache"]
 outbound-static= []
@@ -139,6 +152,7 @@ inbound-quic = ["rustls"]
 inbound-tls = []
 inbound-chain = []
 inbound-cat = ["tokio/io-std"]
+inbound-tproxy = []
 
 plugin = ["async-ffi", "libloading"]
 api = ["axum"]
@@ -147,7 +161,7 @@ ctrlc = ["tokio/signal"]
 
 [dependencies]
 # Common
-tokio = { version = "1", features = ["sync", "io-util", "net", "time", "rt", "rt-multi-thread"] }
+tokio = { version = "1", features = ["sync", "io-util", "net", "time", "rt", "rt-multi-thread", "macros"] }
 protobuf = "3.6"
 thiserror = "1.0"
 futures = "0.3"
@@ -187,6 +201,9 @@ libloading = { version = "0.7", optional = true }
 serde_json = { version = "1.0", features = ["raw_value"], optional = true }
 serde_derive = { version = "1.0", optional = true }
 serde = { version = "1.0", optional = true }
+
+# config-yaml
+serde_yaml_ng = { version = "0.10", optional = true }
 
 # config-conf
 
@@ -252,8 +269,8 @@ quinn = { version = "0.11", default-features = false, optional = true }
 rustls = { version = "0.23", default-features = false, features = ["std"], optional = true }
 
 # Reality
-reality = { git = "https://github.com/eycorsican/reality-rs.git", optional = true }
-reality-rustls = { package = "rustls", git = "https://github.com/eycorsican/reality-rustls.git", branch = "reality-rebase-0.23.36", optional = true, default-features = false, features = ["ring", "std", "tls12", "logging"] }
+reality = { git = "https://github.com/Acheirial/reality-rs.git", rev = "8824b070d4a7b2b33d7553c430d1d3745f858ec2", optional = true }
+reality-rustls = { package = "rustls", git = "https://github.com/Acheirial/reality-rustls.git", rev = "a23b7ed094ae3998e163878821fe864a6efc0469", optional = true, default-features = false, features = ["ring", "std", "tls12", "logging"] }
 
 # API
 axum = { version = "0.7", default-features = false, features = ["http1", "tokio", "json"], optional = true }

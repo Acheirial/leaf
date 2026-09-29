@@ -74,6 +74,8 @@ pub mod socks;
 pub mod r#static;
 #[cfg(feature = "outbound-tls")]
 pub mod tls;
+#[cfg(feature = "inbound-tproxy")]
+pub mod tproxy;
 #[cfg(feature = "outbound-trojan")]
 pub mod trojan;
 #[cfg(feature = "outbound-tryall")]

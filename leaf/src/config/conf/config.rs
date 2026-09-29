@@ -1539,12 +1539,14 @@ pub fn to_common(conf: &Config) -> Result<common::Config> {
         domain_resolve: conf.general.as_ref().and_then(|g| g.routing_domain_resolve),
     });
 
-    let mut dns = common::Dns {
-        servers: None,
-        hosts: None,
-    };
+    let mut dns = common::Dns::default();
     if let Some(ext_general) = &conf.general {
-        dns.servers = ext_general.dns_server.clone();
+        dns.servers = ext_general.dns_server.as_ref().map(|servers| {
+            servers
+                .iter()
+                .map(|address| common::DnsServer::Address(address.clone()))
+                .collect()
+        });
     }
     dns.hosts = conf.host.clone();
     common_config.dns = Some(dns);

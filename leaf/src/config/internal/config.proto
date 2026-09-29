@@ -7,8 +7,34 @@ message Dns {
 		repeated string values = 1;
 	}
 
-	repeated string servers = 1;
+	repeated DnsServer servers = 1;
 	map<string, Ips> hosts = 3;
+	optional string client_ip = 4;
+	optional string tag = 5;
+	optional string query_strategy = 6;
+	optional bool disable_cache = 7;
+	optional bool serve_stale = 8;
+	optional uint32 serve_expired_ttl = 9;
+	optional bool disable_fallback = 10;
+	optional bool disable_fallback_if_match = 11;
+	optional bool enable_parallel_query = 12;
+	optional bool use_system_hosts = 13;
+}
+
+message DnsServer {
+	string address = 1;
+	optional uint32 port = 2;
+	optional bool skip_fallback = 3;
+	repeated string domains = 4;
+	repeated string expected_ips = 5;
+	repeated string unexpected_ips = 6;
+	optional string query_strategy = 7;
+	optional string tag = 8;
+	optional uint64 timeout_ms = 9;
+	optional bool disable_cache = 10;
+	optional bool serve_stale = 11;
+	optional uint32 serve_expired_ttl = 12;
+	optional bool final_query = 13;
 }
 
 message Log {
@@ -77,11 +103,28 @@ message QuicInboundSettings {
 	repeated string alpn = 3;
 }
 
+message TlsCertificate {
+	optional string certificate_file = 1;
+	repeated string certificate = 2;
+	optional string key_file = 3;
+	repeated string key = 4;
+	optional string usage = 5;
+	optional uint64 ocsp_stapling = 6;
+	optional bool one_time_loading = 7;
+	optional bool build_chain = 8;
+}
+
 message TlsInboundSettings {
 	string certificate = 1;
 	string certificate_key = 2;
 	string ech_config = 3;
 	string ech_key = 4;
+	repeated TlsCertificate certificates = 5;
+	optional bool reject_unknown_sni = 6;
+	optional string ech_server_keys = 7;
+	optional string min_version = 8;
+	optional string max_version = 9;
+	optional string cipher_suites = 10;
 }
 
 message ChainInboundSettings {
@@ -89,6 +132,9 @@ message ChainInboundSettings {
 }
 
 message MptpInboundSettings {
+}
+
+message TproxyInboundSettings {
 }
 
 message HcInboundSettings {
@@ -146,6 +192,17 @@ message TlsOutboundSettings {
 	string ech_config_list = 6;
 	bool ech = 7;
 	bool ech_disable_dns_lookup = 8;
+	repeated TlsCertificate certificates = 9;
+	optional string pinned_peer_cert_sha256 = 10;
+	optional string verify_peer_cert_by_name = 11;
+	optional string min_version = 12;
+	optional string max_version = 13;
+	optional string cipher_suites = 14;
+	repeated string curve_preferences = 15;
+	optional bool enable_session_resumption = 16;
+	optional bool disable_system_root = 17;
+	optional string master_key_log = 18;
+	optional string fingerprint = 19;
 }
 
 message WebSocketOutboundSettings {

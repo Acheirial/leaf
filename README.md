@@ -53,6 +53,20 @@ A versatile and efficient proxy framework.
 | TUN | ✅ | ❌ | Linux, macOS, Windows, iOS, Android; lwip, smoltcp |
 | NF | ✅ | ❌ | Windows, [NetFilter SDK](https://netfiltersdk.com/) |
 
+## Configuration
+
+Leaf selects the configuration format by file extension:
+
+| Extension | Format |
+|---|---|
+| `.yml`, `.yaml` | YAML (preferred) |
+| `.json` | JSON |
+| `.conf` | clash-style `.conf` |
+
+YAML is the preferred format. See the [YAML configuration guide](docs/yaml_config.md)
+for a complete, runnable example covering `inbounds`, `outbounds`, `dns`, `router`
+and `log`. JSON and clash-style `.conf` configurations remain fully supported.
+
 ## Building
 
 This repository contains the core library only (the `leaf` crate).

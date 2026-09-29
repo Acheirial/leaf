@@ -929,12 +929,42 @@ pub fn test_configs(configs: Vec<String>, socks_addr: &str, socks_port: u16) -> 
     test_configs_with_auth(configs, socks_addr, socks_port, None, None)
 }
 
+/// Like [`test_configs`], but skips the UDP part of the scenario.
+///
+/// A chained stream transport cannot carry UDP for a `socks` payload: a socks
+/// outbound reaches UDP through a real association to the socks server address
+/// ([`new_socks_datagram`]), while the intermediate hops of a chain are stream
+/// only and hand it nothing to associate over. The payload pair the chain tests
+/// used to carry UDP, trojan or shadowsocks, tunnelled the datagram inside the
+/// chained stream connection, and both have had their inbound half removed
+/// (with the NF inbound), so no protocol left in this crate can carry UDP over
+/// a chain. Tests whose chain ends in a socks payload therefore check the
+/// stream path only.
+pub fn test_configs_tcp_only(
+    configs: Vec<String>,
+    socks_addr: &str,
+    socks_port: u16,
+) -> anyhow::Result<()> {
+    test_configs_inner(configs, socks_addr, socks_port, None, None, false)
+}
+
 pub fn test_configs_with_auth(
     configs: Vec<String>,
     socks_addr: &str,
     socks_port: u16,
     username: Option<String>,
     password: Option<String>,
+) -> anyhow::Result<()> {
+    test_configs_inner(configs, socks_addr, socks_port, username, password, true)
+}
+
+fn test_configs_inner(
+    configs: Vec<String>,
+    socks_addr: &str,
+    socks_port: u16,
+    username: Option<String>,
+    password: Option<String>,
+    udp: bool,
 ) -> anyhow::Result<()> {
     info!("testing configs");
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -993,114 +1023,116 @@ pub fn test_configs_with_auth(
             ));
         }
 
-        // Test UDP
-        sess.destination = leaf::session::SocksAddr::Ip(udp_addr);
-        let dgram = timeout(
-            Duration::from_secs(1),
-            new_socks_datagram(
-                &socks_addr,
-                socks_port,
-                &sess,
-                username.clone(),
-                password.clone(),
-            ),
-        )
-        .await
-        .map_err(|e| anyhow::anyhow!("create socks datagram timeout: {}", e))?
-        .map_err(|e| anyhow::anyhow!("create socks datagram failed: {}", e))?;
-
-        let (mut r, mut s) = dgram.split();
-        let msg = b"def";
-        let n = timeout(
-            Duration::from_secs(1),
-            s.send_to(msg.as_ref(), &sess.destination),
-        )
-        .await
-        .map_err(|e| anyhow::anyhow!("send datagram timeout: {}", e))?
-        .map_err(|e| anyhow::anyhow!("send datagram failed: {}", e))?;
-
-        if msg.len() != n {
-            return Err(anyhow::anyhow!(
-                "send datagram partial write: expected {}, got {}",
-                msg.len(),
-                n
-            ));
-        }
-
-        let mut buf = vec![0u8; 2 * 1024];
-        let (n, raddr) = timeout(Duration::from_secs(1), r.recv_from(&mut buf))
+        if udp {
+            // Test UDP
+            sess.destination = leaf::session::SocksAddr::Ip(udp_addr);
+            let dgram = timeout(
+                Duration::from_secs(1),
+                new_socks_datagram(
+                    &socks_addr,
+                    socks_port,
+                    &sess,
+                    username.clone(),
+                    password.clone(),
+                ),
+            )
             .await
-            .map_err(|e| anyhow::anyhow!("recv datagram timeout: {}", e))?
-            .map_err(|e| anyhow::anyhow!("recv datagram failed: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("create socks datagram timeout: {}", e))?
+            .map_err(|e| anyhow::anyhow!("create socks datagram failed: {}", e))?;
 
-        if msg != &buf[..n] {
-            return Err(anyhow::anyhow!(
-                "datagram echo mismatch: expected {:?}, got {:?}",
-                msg,
-                &buf[..n]
-            ));
-        }
-        if &raddr != &sess.destination {
-            return Err(anyhow::anyhow!(
-                "datagram source mismatch: expected {:?}, got {:?}",
-                sess.destination,
-                raddr
-            ));
-        }
-
-        // Test if we can handle a second UDP session. This can fail in stream
-        // transports if the stream ID has not been correctly set.
-        let dgram2 = timeout(
-            Duration::from_secs(1),
-            new_socks_datagram(
-                &socks_addr,
-                socks_port,
-                &sess,
-                username.clone(),
-                password.clone(),
-            ),
-        )
-        .await
-        .map_err(|e| anyhow::anyhow!("create second socks datagram timeout: {}", e))?
-        .map_err(|e| anyhow::anyhow!("create second socks datagram failed: {}", e))?;
-
-        let (mut r, mut s) = dgram2.split();
-        let msg = b"ghi";
-        let n = timeout(
-            Duration::from_secs(1),
-            s.send_to(msg.as_ref(), &sess.destination),
-        )
-        .await
-        .map_err(|e| anyhow::anyhow!("send second datagram timeout: {}", e))?
-        .map_err(|e| anyhow::anyhow!("send second datagram failed: {}", e))?;
-
-        if msg.len() != n {
-            return Err(anyhow::anyhow!(
-                "send second datagram partial write: expected {}, got {}",
-                msg.len(),
-                n
-            ));
-        }
-
-        let mut buf = vec![0u8; 2 * 1024];
-        let (n, raddr) = timeout(Duration::from_secs(1), r.recv_from(&mut buf))
+            let (mut r, mut s) = dgram.split();
+            let msg = b"def";
+            let n = timeout(
+                Duration::from_secs(1),
+                s.send_to(msg.as_ref(), &sess.destination),
+            )
             .await
-            .map_err(|e| anyhow::anyhow!("recv second datagram timeout: {}", e))?
-            .map_err(|e| anyhow::anyhow!("recv second datagram failed: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("send datagram timeout: {}", e))?
+            .map_err(|e| anyhow::anyhow!("send datagram failed: {}", e))?;
 
-        if msg != &buf[..n] {
-            return Err(anyhow::anyhow!(
-                "second datagram echo mismatch: expected {:?}, got {:?}",
-                msg,
-                &buf[..n]
-            ));
-        }
-        if &raddr != &sess.destination {
-            return Err(anyhow::anyhow!(
-                "second datagram source mismatch: expected {:?}, got {:?}",
-                sess.destination,
-                raddr
-            ));
+            if msg.len() != n {
+                return Err(anyhow::anyhow!(
+                    "send datagram partial write: expected {}, got {}",
+                    msg.len(),
+                    n
+                ));
+            }
+
+            let mut buf = vec![0u8; 2 * 1024];
+            let (n, raddr) = timeout(Duration::from_secs(1), r.recv_from(&mut buf))
+                .await
+                .map_err(|e| anyhow::anyhow!("recv datagram timeout: {}", e))?
+                .map_err(|e| anyhow::anyhow!("recv datagram failed: {}", e))?;
+
+            if msg != &buf[..n] {
+                return Err(anyhow::anyhow!(
+                    "datagram echo mismatch: expected {:?}, got {:?}",
+                    msg,
+                    &buf[..n]
+                ));
+            }
+            if &raddr != &sess.destination {
+                return Err(anyhow::anyhow!(
+                    "datagram source mismatch: expected {:?}, got {:?}",
+                    sess.destination,
+                    raddr
+                ));
+            }
+
+            // Test if we can handle a second UDP session. This can fail in stream
+            // transports if the stream ID has not been correctly set.
+            let dgram2 = timeout(
+                Duration::from_secs(1),
+                new_socks_datagram(
+                    &socks_addr,
+                    socks_port,
+                    &sess,
+                    username.clone(),
+                    password.clone(),
+                ),
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("create second socks datagram timeout: {}", e))?
+            .map_err(|e| anyhow::anyhow!("create second socks datagram failed: {}", e))?;
+
+            let (mut r, mut s) = dgram2.split();
+            let msg = b"ghi";
+            let n = timeout(
+                Duration::from_secs(1),
+                s.send_to(msg.as_ref(), &sess.destination),
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("send second datagram timeout: {}", e))?
+            .map_err(|e| anyhow::anyhow!("send second datagram failed: {}", e))?;
+
+            if msg.len() != n {
+                return Err(anyhow::anyhow!(
+                    "send second datagram partial write: expected {}, got {}",
+                    msg.len(),
+                    n
+                ));
+            }
+
+            let mut buf = vec![0u8; 2 * 1024];
+            let (n, raddr) = timeout(Duration::from_secs(1), r.recv_from(&mut buf))
+                .await
+                .map_err(|e| anyhow::anyhow!("recv second datagram timeout: {}", e))?
+                .map_err(|e| anyhow::anyhow!("recv second datagram failed: {}", e))?;
+
+            if msg != &buf[..n] {
+                return Err(anyhow::anyhow!(
+                    "second datagram echo mismatch: expected {:?}, got {:?}",
+                    msg,
+                    &buf[..n]
+                ));
+            }
+            if &raddr != &sess.destination {
+                return Err(anyhow::anyhow!(
+                    "second datagram source mismatch: expected {:?}, got {:?}",
+                    sess.destination,
+                    raddr
+                ));
+            }
         }
 
         // Cancel the background task.

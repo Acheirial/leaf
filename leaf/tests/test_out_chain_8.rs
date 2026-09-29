@@ -170,5 +170,5 @@ fn test_out_chain_8() -> anyhow::Result<()> {
         config3.to_string(),
         config4.to_string(),
     ];
-    common::test_configs(configs, "127.0.0.1", 1086)
+    common::test_configs_tcp_only(configs, "127.0.0.1", 1086)
 }

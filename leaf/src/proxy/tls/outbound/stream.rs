@@ -1,6 +1,6 @@
 use std::io;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use futures::TryFutureExt;
 use tracing::trace;
@@ -10,7 +10,14 @@ use {
     std::sync::Arc,
     std::{fs::File, io::BufReader, io::Cursor},
     tokio_rustls::{
-        rustls::{pki_types::ServerName, ClientConfig, RootCertStore},
+        rustls::{
+            client::{ClientSessionMemoryCache, WebPkiServerVerifier},
+            client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
+            crypto::{CryptoProvider, SupportedKxGroup},
+            pki_types::{CertificateDer, ServerName, UnixTime},
+            version, ClientConfig, DigitallySignedStruct, Error, KeyLogFile, Resumption,
+            RootCertStore, SignatureScheme, SupportedProtocolVersion,
+        },
         TlsConnector,
     },
 };
@@ -22,13 +29,24 @@ use tokio_rustls::rustls::pki_types::{pem::PemObject, EchConfigListBytes};
 
 #[cfg(feature = "openssl-tls")]
 use {
-    openssl::ssl::{Ssl, SslConnector, SslMethod},
+    openssl::ssl::{Ssl, SslConnector, SslMethod, SslVersion},
+    openssl::x509::X509,
     std::pin::Pin,
     std::sync::Once,
     tokio_openssl::SslStream,
 };
 
+use crate::config::TlsOutboundSettings;
 use crate::{app::SyncDnsClient, proxy::*, session::Session};
+
+#[cfg(feature = "rustls-tls")]
+#[path = "../verify.rs"]
+mod verify;
+
+/// Whether `value` is Xray's `FromMitM` sentinel (case-insensitive).
+fn is_from_mitm(value: &str) -> bool {
+    value.eq_ignore_ascii_case("frommitm")
+}
 
 #[cfg(feature = "rustls-tls")]
 mod dangerous {
@@ -92,14 +110,23 @@ mod dangerous {
     }
 }
 
+/// Everything needed to (re)build a rustls client config for one connection.
+#[cfg(feature = "rustls-tls")]
+struct RustlsClientOptions {
+    alpns: Vec<String>,
+    roots: Arc<RootCertStore>,
+    verifier: Option<Arc<dyn ServerCertVerifier>>,
+    insecure: bool,
+    versions: Option<Vec<&'static SupportedProtocolVersion>>,
+    provider: Arc<CryptoProvider>,
+    session_resumption: bool,
+    key_log: bool,
+}
+
 pub struct Handler {
     server_name: String,
     #[cfg(feature = "rustls-tls")]
     alpns: Vec<String>,
-    #[cfg(feature = "rustls-tls")]
-    certificate: Option<String>,
-    #[cfg(feature = "rustls-tls")]
-    certificate_key: Option<String>,
     #[cfg(feature = "rustls-tls")]
     insecure: bool,
     #[cfg(feature = "rustls-tls")]
@@ -110,54 +137,307 @@ pub struct Handler {
     dns_client: SyncDnsClient,
     ech_enabled: bool,
     #[cfg(feature = "rustls-tls")]
+    rustls_options: RustlsClientOptions,
+    #[cfg(feature = "rustls-tls")]
     tls_config: Option<Arc<ClientConfig>>,
     #[cfg(feature = "openssl-tls")]
     ssl_connector: Option<SslConnector>,
 }
 
+/// Map Xray's `minVersion`/`maxVersion` strings onto the set of rustls
+/// protocol versions to offer.
+///
+/// `None` means "use rustls defaults" (TLS 1.2 + 1.3). rustls cannot negotiate
+/// TLS 1.0/1.1, so a min of "1.0"/"1.1" is clamped up to 1.2, while a max of
+/// "1.0"/"1.1" is a hard config error.
+#[cfg(feature = "rustls-tls")]
+fn rustls_versions(
+    min: Option<&str>,
+    max: Option<&str>,
+) -> Result<Option<Vec<&'static SupportedProtocolVersion>>> {
+    fn rank(which: &str, value: &str) -> Result<u8> {
+        match value {
+            "1.0" => Ok(10),
+            "1.1" => Ok(11),
+            "1.2" => Ok(12),
+            "1.3" => Ok(13),
+            _ => Err(anyhow!("invalid tls {which}_version: {value:?}")),
+        }
+    }
+
+    let min = min.map(str::trim).filter(|s| !s.is_empty());
+    let max = max.map(str::trim).filter(|s| !s.is_empty());
+    if min.is_none() && max.is_none() {
+        return Ok(None);
+    }
+
+    let min_rank = match min {
+        Some(value) => rank("min", value)?,
+        None => 0,
+    };
+    let max_rank = match max {
+        Some(value) => rank("max", value)?,
+        None => 13,
+    };
+    if min_rank > max_rank {
+        return Err(anyhow!(
+            "tls min_version {:?} is greater than max_version {:?}",
+            min.unwrap_or_default(),
+            max.unwrap_or_default()
+        ));
+    }
+
+    let mut versions: Vec<&'static SupportedProtocolVersion> = Vec::new();
+    if min_rank <= 12 && max_rank >= 12 {
+        versions.push(&version::TLS12);
+    }
+    if max_rank >= 13 {
+        versions.push(&version::TLS13);
+    }
+    if versions.is_empty() {
+        return Err(anyhow!(
+            "tls max_version {:?} is below the minimum supported by rustls (1.2)",
+            max.unwrap_or_default()
+        ));
+    }
+    if min_rank > 0 && min_rank < 12 {
+        trace!(
+            "tls min_version {:?} is below the rustls minimum; offering TLS 1.2 and up",
+            min.unwrap_or_default()
+        );
+    }
+    Ok(Some(versions))
+}
+
+/// Restrict `provider.cipher_suites` to the requested TLS<=1.2 ciphers (Go/IANA
+/// names), keeping the provider's TLS 1.3 suites. An unknown name is an error.
+#[cfg(feature = "rustls-tls")]
+fn apply_cipher_suites(provider: &mut CryptoProvider, spec: &str) -> Result<()> {
+    let mut chosen = Vec::new();
+    for name in spec.split(':') {
+        let name = name.trim();
+        if name.is_empty() {
+            continue;
+        }
+        match provider
+            .cipher_suites
+            .iter()
+            .find(|cs| format!("{:?}", cs.suite()) == name)
+        {
+            Some(cs) => chosen.push(cs.clone()),
+            None => return Err(anyhow!("unknown tls cipher_suite: {name}")),
+        }
+    }
+
+    let mut tls13 = Vec::new();
+    for cs in &provider.cipher_suites {
+        if format!("{:?}", cs.suite()).starts_with("TLS13_") {
+            tls13.push(cs.clone());
+        }
+    }
+    tls13.extend(chosen);
+    provider.cipher_suites = tls13;
+    Ok(())
+}
+
+/// Map an Xray `curvePreferences` name onto its rustls `NamedGroup` debug name.
+#[cfg(feature = "rustls-tls")]
+fn curve_named_group(name: &str) -> Option<&'static str> {
+    match name.to_ascii_lowercase().as_str() {
+        "curvep256" => Some("secp256r1"),
+        "curvep384" => Some("secp384r1"),
+        "curvep521" => Some("secp521r1"),
+        "x25519" => Some("X25519"),
+        "x25519mlkem768" => Some("X25519MLKEM768"),
+        "secp256r1mlkem768" => Some("secp256r1MLKEM768"),
+        "secp384r1mlkem1024" => Some("secp384r1MLKEM1024"),
+        _ => None,
+    }
+}
+
+/// Restrict `provider.kx_groups` to the requested curves, in order. A name that
+/// is unknown or not provided by the linked rustls backend is an error.
+#[cfg(feature = "rustls-tls")]
+fn apply_curve_preferences(provider: &mut CryptoProvider, names: &[String]) -> Result<()> {
+    let mut groups: Vec<&'static dyn SupportedKxGroup> = Vec::new();
+    for name in names {
+        let expected =
+            curve_named_group(name).ok_or_else(|| anyhow!("unsupported tls curve_preference: {name}"))?;
+        let group = provider
+            .kx_groups
+            .iter()
+            .find(|g| format!("{:?}", g.name()).eq_ignore_ascii_case(expected))
+            .ok_or_else(|| {
+                anyhow!(
+                    "unsupported tls curve_preference: {name} (not provided by the linked rustls crypto provider)"
+                )
+            })?;
+        groups.push(*group);
+    }
+    provider.kx_groups = groups;
+    Ok(())
+}
+
+/// Add PEM certificates from an inline PEM blob or a file path to a root store.
+#[cfg(feature = "rustls-tls")]
+fn load_cert_source(roots: &mut RootCertStore, source: &str) -> Result<()> {
+    if source.contains("-----BEGIN") {
+        let mut pem = BufReader::new(Cursor::new(source.as_bytes()));
+        for cert in rustls_pemfile::certs(&mut pem) {
+            roots.add(cert?)?;
+        }
+    } else {
+        let mut pem = BufReader::new(File::open(source).map_err(|e| {
+            anyhow!("load certificates from {source} failed: {e}")
+        })?);
+        for cert in rustls_pemfile::certs(&mut pem) {
+            roots.add(cert?)?;
+        }
+    }
+    Ok(())
+}
+
+/// Build the rustls client options from the outbound settings.
+#[cfg(feature = "rustls-tls")]
+fn build_rustls_options(
+    settings: &TlsOutboundSettings,
+    alpns: &[String],
+    insecure: bool,
+) -> Result<RustlsClientOptions> {
+    let disable_system_root = settings.disable_system_root.unwrap_or(false);
+    let mut roots = RootCertStore::empty();
+    if !settings.certificates.is_empty() {
+        for (idx, cert) in settings.certificates.iter().enumerate() {
+            let usage = cert.usage.as_deref().unwrap_or("").trim();
+            if !usage.eq_ignore_ascii_case("verify") {
+                return Err(anyhow!(
+                    "tls outbound certificates[{idx}].usage {usage:?} is not supported: only \"verify\" (a client root) is meaningful on an outbound"
+                ));
+            }
+            for (entry_idx, entry) in cert.certificate.iter().enumerate() {
+                if entry.trim().is_empty() {
+                    continue;
+                }
+                load_cert_source(&mut roots, entry).map_err(|e| {
+                    anyhow!("tls outbound certificates[{idx}].certificate[{entry_idx}]: {e}")
+                })?;
+            }
+            if let Some(path) = cert
+                .certificate_file
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                load_cert_source(&mut roots, path)
+                    .map_err(|e| anyhow!("tls outbound certificates[{idx}].certificate_file: {e}"))?;
+            }
+        }
+        if !disable_system_root {
+            roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        }
+    } else {
+        let flat = settings.certificate.trim();
+        if !flat.is_empty() {
+            // Existing flat behaviour: the configured certificate(s) replace the
+            // webpki root set entirely.
+            load_cert_source(&mut roots, flat)?;
+        } else if !disable_system_root {
+            roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        }
+    }
+
+    let pins = match settings.pinned_peer_cert_sha256.as_deref() {
+        Some(spec) if !spec.trim().is_empty() => verify::parse_pins(spec)?,
+        _ => Vec::new(),
+    };
+    let verify_names = match settings.verify_peer_cert_by_name.as_deref() {
+        Some(spec) => verify::parse_verify_names(spec),
+        None => Vec::new(),
+    };
+
+    let versions = rustls_versions(settings.min_version.as_deref(), settings.max_version.as_deref())?;
+
+    #[cfg(feature = "rustls-tls-aws-lc")]
+    let mut provider = rustls::crypto::aws_lc_rs::default_provider();
+    #[cfg(not(feature = "rustls-tls-aws-lc"))]
+    let mut provider = rustls::crypto::ring::default_provider();
+    if let Some(spec) = settings.cipher_suites.as_deref() {
+        if !spec.trim().is_empty() {
+            apply_cipher_suites(&mut provider, spec)?;
+        }
+    }
+    if !settings.curve_preferences.is_empty() {
+        apply_curve_preferences(&mut provider, &settings.curve_preferences)?;
+    }
+    let provider: Arc<CryptoProvider> = Arc::new(provider);
+
+    let verifier = if !insecure && (!pins.is_empty() || !verify_names.is_empty()) {
+        let inner = WebPkiServerVerifier::builder_with_provider(
+            Arc::new(roots.clone()),
+            provider.clone(),
+        )
+        .build()
+        .map_err(|e| anyhow!("build tls outbound cert verifier failed: {e}"))?;
+        Some(
+            Arc::new(verify::PinnedVerifier::new(pins, verify_names, inner))
+                as Arc<dyn ServerCertVerifier>,
+        )
+    } else {
+        None
+    };
+
+    let master_key_log = settings.master_key_log.as_deref().unwrap_or("").trim();
+    let explicit_key_log = !master_key_log.is_empty() && !master_key_log.eq_ignore_ascii_case("none");
+    if explicit_key_log {
+        match std::env::var_os("SSLKEYLOGFILE") {
+            Some(path) if path == std::ffi::OsStr::new(master_key_log) => {}
+            _ => tracing::warn!(
+                "tls outbound master_key_log={master_key_log:?} cannot be opened directly by rustls; set SSLKEYLOGFILE={master_key_log:?} so rustls' KeyLogFile writes there"
+            ),
+        }
+    }
+    let key_log = explicit_key_log || std::env::var_os("SSLKEYLOGFILE").is_some();
+
+    Ok(RustlsClientOptions {
+        alpns: alpns.to_vec(),
+        roots: Arc::new(roots),
+        verifier,
+        insecure,
+        versions,
+        provider,
+        session_resumption: settings.enable_session_resumption.unwrap_or(false),
+        key_log,
+    })
+}
+
 impl Handler {
     #[cfg(feature = "rustls-tls")]
     fn build_rustls_config(
-        alpns: &[String],
-        certificate: Option<&String>,
-        certificate_key: Option<&String>,
-        insecure: bool,
+        options: &RustlsClientOptions,
         ech_config_list: Option<&str>,
     ) -> Result<Arc<ClientConfig>> {
-        let mut roots = RootCertStore::empty();
-        if let Some(cert) = certificate {
-            if cert.contains("-----BEGIN") {
-                let mut pem = BufReader::new(Cursor::new(cert.as_bytes()));
-                for cert in rustls_pemfile::certs(&mut pem) {
-                    roots.add(cert?)?;
-                }
-            } else {
-                let mut pem = BufReader::new(File::open(cert).map_err(|e| {
-                    anyhow::anyhow!("load certificates from {} failed: {}", cert, e)
-                })?);
-                for cert in rustls_pemfile::certs(&mut pem) {
-                    roots.add(cert?)?;
-                }
-            }
-        } else {
-            roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        }
-        #[cfg(feature = "rustls-tls-aws-lc")]
-        let provider = rustls::crypto::aws_lc_rs::default_provider().into();
-        #[cfg(not(feature = "rustls-tls-aws-lc"))]
-        let provider = rustls::crypto::ring::default_provider().into();
-
-        let builder = ClientConfig::builder_with_provider(provider);
         #[cfg(not(feature = "rustls-tls-aws-lc"))]
         if ech_config_list.is_some() {
-            return Err(anyhow::anyhow!(
+            return Err(anyhow!(
                 "tls outbound ech requires rustls-tls-aws-lc (ring backend has no hpke suites)"
             ));
         }
 
+        let builder = ClientConfig::builder_with_provider(options.provider.clone());
+
         let builder = if let Some(ech_config_list) = ech_config_list {
             #[cfg(feature = "rustls-tls-aws-lc")]
             {
+                if let Some(versions) = &options.versions {
+                    if !versions
+                        .iter()
+                        .any(|v| std::ptr::eq(*v, &version::TLS13))
+                    {
+                        return Err(anyhow!(
+                            "tls outbound ech requires TLS 1.3 but max_version excludes it"
+                        ));
+                    }
+                }
                 let ech_config_list = decode_ech_config_list(ech_config_list)?;
                 let suites = rustls::crypto::aws_lc_rs::hpke::ALL_SUPPORTED_SUITES;
                 let ech_config = EchConfig::new(ech_config_list, suites)
@@ -169,27 +449,49 @@ impl Handler {
             #[cfg(not(feature = "rustls-tls-aws-lc"))]
             {
                 let _ = ech_config_list;
-                return Err(anyhow::anyhow!(
+                return Err(anyhow!(
                     "tls outbound ech requires rustls-tls-aws-lc (ring backend has no hpke suites)"
                 ));
             }
         } else {
-            builder
-                .with_safe_default_protocol_versions()
-                .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?
+            match &options.versions {
+                Some(versions) => builder
+                    .with_protocol_versions(versions)
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?,
+                None => builder
+                    .with_safe_default_protocol_versions()
+                    .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?,
+            }
         };
 
-        let mut config = if insecure {
+        let mut config = if options.insecure {
             let builder = builder
                 .dangerous()
                 .with_custom_certificate_verifier(Arc::new(dangerous::NotVerified));
             // FIXME: client authentication is not configured
-            let _ = certificate_key;
             builder.with_no_client_auth()
+        } else if let Some(verifier) = &options.verifier {
+            builder
+                .dangerous()
+                .with_custom_certificate_verifier(verifier.clone())
+                .with_no_client_auth()
         } else {
-            builder.with_root_certificates(roots).with_no_client_auth()
+            builder
+                .with_root_certificates(options.roots.clone())
+                .with_no_client_auth()
         };
-        for alpn in alpns {
+
+        // Session resumption: an in-memory cache when enabled, a no-op store
+        // otherwise (Xray's `EnableSessionResumption` default is disabled).
+        config.resumption = if options.session_resumption {
+            Resumption::store(Arc::new(ClientSessionMemoryCache::new(128)))
+        } else {
+            Resumption::disabled()
+        };
+        if options.key_log {
+            config.key_log = Arc::new(KeyLogFile::new());
+        }
+        for alpn in &options.alpns {
             config.alpn_protocols.push(alpn.as_bytes().to_vec());
         }
         Ok(Arc::new(config))
@@ -264,10 +566,7 @@ impl Handler {
             let dns_client = self.dns_client.read().await;
             Some(dns_client.lookup_ech_config_list(name).await)
         } else {
-            trace!(
-                "ech source for {}: fixed-or-none (dns lookup skipped)",
-                name
-            );
+            trace!("ech source for {}: fixed-or-none (dns lookup skipped)", name);
             None
         };
         Self::resolve_selected_ech_config_list(
@@ -277,47 +576,69 @@ impl Handler {
         )
     }
 
-    pub fn new(
-        server_name: String,
-        alpns: Vec<String>,
-        certificate: Option<String>,
-        certificate_key: Option<String>,
-        insecure: bool,
-        ech: bool,
-        ech_disable_dns_lookup: bool,
-        ech_config_list: Option<String>,
-        dns_client: SyncDnsClient,
-    ) -> Result<Self> {
+    /// Create a TLS outbound handler from the protobuf settings.
+    ///
+    /// # Divergences from Xray
+    ///
+    /// * `fingerprint`: only `"unsafe"` (or unset) is accepted; any other value
+    ///   is rejected because rustls/openssl cannot reproduce uTLS ClientHello
+    ///   presets. Xray silently falls back to its native TLS stack for unknown
+    ///   fingerprints by default, but this handler refuses rather than ignoring
+    ///   the option.
+    /// * `masterKeyLog`: rustls' `KeyLogFile` writes to `$SSLKEYLOGFILE`, so a
+    ///   configured path can only be honoured when the env var points at it (a
+    ///   warning is logged otherwise).
+    /// * `pinnedPeerCertSha256`: an unsynchronized pin matches the leaf only;
+    ///   it does not support pinning an intermediate CA the way Xray does.
+    pub fn new(settings: &TlsOutboundSettings, dns_client: SyncDnsClient) -> Result<Self> {
+        let fingerprint = settings.fingerprint.as_deref().unwrap_or("").trim();
+        if !fingerprint.is_empty() && !fingerprint.eq_ignore_ascii_case("unsafe") {
+            return Err(anyhow!(
+                "tls outbound fingerprint {fingerprint:?} is not supported: ClientHello fingerprinting requires a patched TLS stack (uTLS); only \"unsafe\" (the native TLS stack) is available"
+            ));
+        }
+
+        // `FromMitM` means "use the tunnel destination name"; the handler falls
+        // back to the session destination whenever `server_name` is empty.
+        let mut server_name = settings.server_name.clone();
+        if is_from_mitm(&server_name) {
+            server_name.clear();
+        }
+        let mut alpns = settings.alpn.clone();
+        if alpns.len() == 1 && is_from_mitm(&alpns[0]) {
+            // Xray's non-`mitmAlpn11` fallback (leaf has no `mitmAlpn11` signal).
+            alpns = vec!["h2".to_string(), "http/1.1".to_string()];
+        } else if alpns.iter().any(|p| is_from_mitm(p)) {
+            return Err(anyhow!(
+                "tls outbound alpn: \"fromMitM\" is only allowed as the single alpn element"
+            ));
+        }
+
+        let ech_enabled = settings.ech;
         let mut handler = Handler {
             server_name,
             #[cfg(feature = "rustls-tls")]
             alpns: alpns.clone(),
             #[cfg(feature = "rustls-tls")]
-            certificate: certificate.clone(),
+            insecure: settings.insecure,
             #[cfg(feature = "rustls-tls")]
-            certificate_key: certificate_key.clone(),
+            fixed_ech_config_list: if settings.ech_config_list.is_empty() {
+                None
+            } else {
+                Some(settings.ech_config_list.clone())
+            },
             #[cfg(feature = "rustls-tls")]
-            insecure,
-            #[cfg(feature = "rustls-tls")]
-            fixed_ech_config_list: ech_config_list.clone(),
-            #[cfg(feature = "rustls-tls")]
-            ech_disable_dns_lookup,
+            ech_disable_dns_lookup: settings.ech_disable_dns_lookup,
             #[cfg(feature = "rustls-tls")]
             dns_client,
-            ech_enabled: ech,
+            ech_enabled,
+            #[cfg(feature = "rustls-tls")]
+            rustls_options: build_rustls_options(settings, &alpns, settings.insecure)?,
             #[cfg(feature = "rustls-tls")]
             tls_config: None,
             #[cfg(feature = "openssl-tls")]
             ssl_connector: None,
         };
-        #[cfg(not(feature = "rustls-tls"))]
-        let _ = (
-            &certificate,
-            &certificate_key,
-            ech_disable_dns_lookup,
-            &ech_config_list,
-            &dns_client,
-        );
 
         #[cfg(feature = "rustls-tls")]
         {
@@ -326,55 +647,181 @@ impl Handler {
             } else {
                 tracing::trace!("tls outbound ech not configured");
             }
-            handler.tls_config = Some(Self::build_rustls_config(
-                &alpns,
-                certificate.as_ref(),
-                certificate_key.as_ref(),
-                insecure,
-                if handler.ech_enabled {
-                    #[cfg(feature = "rustls-tls-aws-lc")]
-                    {
-                        ech_config_list.as_deref()
-                    }
-                    #[cfg(not(feature = "rustls-tls-aws-lc"))]
-                    {
-                        None
-                    }
-                } else {
+            let initial_ech_config = if handler.ech_enabled {
+                #[cfg(feature = "rustls-tls-aws-lc")]
+                {
+                    handler.fixed_ech_config_list.as_deref()
+                }
+                #[cfg(not(feature = "rustls-tls-aws-lc"))]
+                {
                     None
-                },
+                }
+            } else {
+                None
+            };
+            handler.tls_config = Some(Self::build_rustls_config(
+                &handler.rustls_options,
+                initial_ech_config,
             )?);
         }
 
         #[cfg(feature = "openssl-tls")]
         {
-            {
-                static ONCE: Once = Once::new();
-                ONCE.call_once(|| unsafe { openssl_probe::init_openssl_env_vars() });
-            }
-            let mut builder =
-                SslConnector::builder(SslMethod::tls()).expect("create ssl connector failed");
-            if !alpns.is_empty() {
-                let mut wire = Vec::new();
-                for alpn in alpns.iter() {
-                    if alpn.len() > 255 {
-                        return Err(anyhow::anyhow!(
-                            "tls outbound alpn protocol name too long: {}",
-                            alpn
-                        ));
-                    }
-                    wire.push(alpn.len() as u8);
-                    wire.extend_from_slice(alpn.as_bytes());
-                }
-                builder.set_alpn_protos(&wire).expect("set alpn failed");
-            }
-            if insecure {
-                builder.set_verify(openssl::ssl::SslVerifyMode::NONE);
-            }
-            handler.ssl_connector = Some(builder.build());
+            handler.ssl_connector = Some(Self::build_openssl_connector(settings, &alpns)?);
         }
+
         Ok(handler)
     }
+
+    #[cfg(feature = "openssl-tls")]
+    fn build_openssl_connector(
+        settings: &TlsOutboundSettings,
+        alpns: &[String],
+    ) -> Result<SslConnector> {
+        static ONCE: Once = Once::new();
+        ONCE.call_once(|| unsafe { openssl_probe::init_openssl_env_vars() });
+
+        if settings
+            .pinned_peer_cert_sha256
+            .as_deref()
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false)
+        {
+            return Err(anyhow!(
+                "tls outbound pinned_peer_cert_sha256 is not supported by the openssl backend"
+            ));
+        }
+        if settings
+            .verify_peer_cert_by_name
+            .as_deref()
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false)
+        {
+            return Err(anyhow!(
+                "tls outbound verify_peer_cert_by_name is not supported by the openssl backend"
+            ));
+        }
+        if !settings.curve_preferences.is_empty() {
+            return Err(anyhow!(
+                "tls outbound curve_preferences is not supported by the openssl backend"
+            ));
+        }
+        if settings.enable_session_resumption == Some(true) {
+            return Err(anyhow!(
+                "tls outbound enable_session_resumption is not supported by the openssl backend"
+            ));
+        }
+        if settings
+            .master_key_log
+            .as_deref()
+            .map(|s| !s.trim().is_empty() && !s.trim().eq_ignore_ascii_case("none"))
+            .unwrap_or(false)
+        {
+            return Err(anyhow!(
+                "tls outbound master_key_log is not supported by the openssl backend"
+            ));
+        }
+        if settings.disable_system_root == Some(true) {
+            return Err(anyhow!(
+                "tls outbound disable_system_root is not supported by the openssl backend"
+            ));
+        }
+
+        let mut builder =
+            SslConnector::builder(SslMethod::tls()).expect("create ssl connector failed");
+
+        if let Some(value) = settings.min_version.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            builder
+                .set_min_proto_version(Some(openssl_version(value)?))
+                .map_err(|e| anyhow!("invalid tls min_version {value:?}: {e}"))?;
+        }
+        if let Some(value) = settings.max_version.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            builder
+                .set_max_proto_version(Some(openssl_version(value)?))
+                .map_err(|e| anyhow!("invalid tls max_version {value:?}: {e}"))?;
+        }
+        if let Some(spec) = settings.cipher_suites.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            builder
+                .set_cipher_list(spec)
+                .map_err(|e| anyhow!("invalid tls cipher_suites {spec:?}: {e}"))?;
+        }
+
+        if !settings.certificates.is_empty() {
+            for (idx, cert) in settings.certificates.iter().enumerate() {
+                let usage = cert.usage.as_deref().unwrap_or("").trim();
+                if !usage.eq_ignore_ascii_case("verify") {
+                    return Err(anyhow!(
+                        "tls outbound certificates[{idx}].usage {usage:?} is not supported: only \"verify\" (a client root) is meaningful on an outbound"
+                    ));
+                }
+                for entry in &cert.certificate {
+                    add_pem_to_openssl_roots(&mut builder, entry)?;
+                }
+                if let Some(path) = cert
+                    .certificate_file
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                {
+                    add_pem_to_openssl_roots(&mut builder, path)?;
+                }
+            }
+        } else if !settings.certificate.trim().is_empty() {
+            add_pem_to_openssl_roots(&mut builder, &settings.certificate)?;
+        }
+
+        if !alpns.is_empty() {
+            let mut wire = Vec::new();
+            for alpn in alpns.iter() {
+                if alpn.len() > 255 {
+                    return Err(anyhow!("tls outbound alpn protocol name too long: {}", alpn));
+                }
+                wire.push(alpn.len() as u8);
+                wire.extend_from_slice(alpn.as_bytes());
+            }
+            builder.set_alpn_protos(&wire).expect("set alpn failed");
+        }
+        if settings.insecure {
+            builder.set_verify(openssl::ssl::SslVerifyMode::NONE);
+        }
+
+        Ok(builder.build())
+    }
+}
+
+/// Map an Xray version string onto an OpenSSL protocol version.
+#[cfg(feature = "openssl-tls")]
+fn openssl_version(value: &str) -> Result<SslVersion> {
+    match value {
+        "1.0" => Ok(SslVersion::TLS1),
+        "1.1" => Ok(SslVersion::TLS1_1),
+        "1.2" => Ok(SslVersion::TLS1_2),
+        "1.3" => Ok(SslVersion::TLS1_3),
+        _ => Err(anyhow!("invalid tls version: {value:?}")),
+    }
+}
+
+/// Add PEM certificates (inline blob or file path) to the OpenSSL trust store.
+#[cfg(feature = "openssl-tls")]
+fn add_pem_to_openssl_roots(
+    builder: &mut openssl::ssl::SslConnectorBuilder,
+    source: &str,
+) -> Result<()> {
+    let data = if source.contains("-----BEGIN") {
+        source.as_bytes().to_vec()
+    } else {
+        std::fs::read(source)
+            .map_err(|e| anyhow!("load certificates from {source} failed: {e}"))?
+    };
+    let certs = X509::stack_from_pem(&data)
+        .map_err(|e| anyhow!("parse certificates from {source} failed: {e}"))?;
+    for cert in certs {
+        builder
+            .cert_store_mut()
+            .add_cert(cert)
+            .map_err(|e| anyhow!("add certificate from {source} failed: {e}"))?;
+    }
+    Ok(())
 }
 
 #[cfg(all(feature = "rustls-tls", feature = "rustls-tls-aws-lc"))]
@@ -554,14 +1001,8 @@ impl OutboundStreamHandler for Handler {
                             .select_ech_config_list(&name, !ech_dns_lookup_skipped)
                             .await?;
                         ech_config_selected = selected_ech.is_some();
-                        Self::build_rustls_config(
-                            &self.alpns,
-                            self.certificate.as_ref(),
-                            self.certificate_key.as_ref(),
-                            self.insecure,
-                            selected_ech.as_deref(),
-                        )
-                        .map_err(|e| io::Error::other(format!("build tls config failed: {}", e)))?
+                        Self::build_rustls_config(&self.rustls_options, selected_ech.as_deref())
+                            .map_err(|e| io::Error::other(format!("build tls config failed: {}", e)))?
                     } else {
                         self.tls_config
                             .as_ref()
@@ -652,16 +1093,24 @@ mod tests {
     use tokio::sync::RwLock;
 
     use crate::app::{dns::DnsClient, SyncDnsClient};
+    use crate::config::TlsOutboundSettings;
     #[cfg(feature = "rustls-tls-aws-lc")]
     use crate::session::Session;
 
-    use super::{decode_base64, ensure_ech_config_list_bytes, Handler};
+    use super::{
+        decode_base64, ensure_ech_config_list_bytes, rustls_versions, Handler, RustlsClientOptions,
+    };
 
     fn new_test_dns_client() -> SyncDnsClient {
         let mut dns = crate::config::Dns::new();
         dns.servers.push("1.1.1.1".to_string());
         let dns = MessageField::some(dns);
         Arc::new(RwLock::new(DnsClient::new(&dns).unwrap()))
+    }
+
+    fn test_rustls_options() -> RustlsClientOptions {
+        let settings = TlsOutboundSettings::new();
+        super::build_rustls_options(&settings, &[], false).unwrap()
     }
 
     #[test]
@@ -695,6 +1144,21 @@ mod tests {
         let (out, wrapped) = ensure_ech_config_list_bytes(input.clone());
         assert!(!wrapped);
         assert_eq!(out, input);
+    }
+
+    #[test]
+    fn test_rustls_versions_defaults_to_none() {
+        assert!(rustls_versions(None, None).unwrap().is_none());
+        assert_eq!(rustls_versions(Some("1.2"), None).unwrap().unwrap().len(), 2);
+        assert_eq!(rustls_versions(None, Some("1.2")).unwrap().unwrap().len(), 1);
+        assert_eq!(rustls_versions(Some("1.3"), None).unwrap().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_rustls_versions_rejects_bad_ranges() {
+        assert!(rustls_versions(Some("1.4"), None).is_err());
+        assert!(rustls_versions(None, Some("1.1")).is_err());
+        assert!(rustls_versions(Some("1.3"), Some("1.2")).is_err());
     }
 
     #[test]
@@ -744,41 +1208,27 @@ mod tests {
 
     #[test]
     fn test_new_with_invalid_ech_config_list_fails() {
-        let result = Handler::new(
-            "localhost".to_string(),
-            vec![],
-            None,
-            None,
-            false,
-            true,
-            false,
-            Some("$$$".to_string()),
-            new_test_dns_client(),
-        );
-        assert!(result.is_err());
+        let mut settings = TlsOutboundSettings::new();
+        settings.server_name = "localhost".to_string();
+        settings.ech = true;
+        settings.ech_config_list = "$$$".to_string();
+        assert!(Handler::new(&settings, new_test_dns_client()).is_err());
     }
 
     #[cfg(not(feature = "rustls-tls-aws-lc"))]
     #[test]
     fn test_new_with_ech_on_ring_does_not_fail_startup() {
-        let result = Handler::new(
-            "localhost".to_string(),
-            vec![],
-            None,
-            None,
-            false,
-            true,
-            false,
-            None,
-            new_test_dns_client(),
-        );
-        assert!(result.is_ok());
+        let mut settings = TlsOutboundSettings::new();
+        settings.server_name = "localhost".to_string();
+        settings.ech = true;
+        assert!(Handler::new(&settings, new_test_dns_client()).is_ok());
     }
 
     #[cfg(not(feature = "rustls-tls-aws-lc"))]
     #[test]
     fn test_build_rustls_config_with_ech_on_ring_returns_connection_error() {
-        let err = Handler::build_rustls_config(&[], None, None, false, Some("AQID")).unwrap_err();
+        let err =
+            Handler::build_rustls_config(&test_rustls_options(), Some("AQID")).unwrap_err();
         assert!(err.to_string().contains("requires rustls-tls-aws-lc"));
     }
 }
