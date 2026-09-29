@@ -77,14 +77,7 @@ async fn single_health_check(
             match h.handle(&sess, None, stream).await {
                 Ok(stream) => {
                     let Ok(tls_handler) = crate::proxy::tls::outbound::StreamHandler::new(
-                        String::from(""),
-                        vec![],
-                        None,
-                        None,
-                        false,
-                        false,
-                        false,
-                        None,
+                        &crate::config::TlsOutboundSettings::new(),
                         dns_client.clone(),
                     ) else {
                         return Measure::new(idx, u128::MAX, tag);

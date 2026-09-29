@@ -21,8 +21,8 @@ A versatile and efficient proxy framework.
 |---|---|---|
 | HTTP | ✅ | ❌ |
 | SOCKS5 | ✅ | ✅ |
-| Shadowsocks | ✅ | ✅ |
-| Trojan | ✅ | ✅ |
+| Shadowsocks | ❌ | ✅ |
+| Trojan | ❌ | ✅ |
 | VMess | ❌ | ✅ |
 | Vless | ❌ | ✅ |
 
@@ -51,7 +51,6 @@ A versatile and efficient proxy framework.
 | Mechanism | Inbound | Outbound | Notes |
 |---|---|---|---|
 | TUN | ✅ | ❌ | Linux, macOS, Windows, iOS, Android; lwip, smoltcp |
-| NF | ✅ | ❌ | Windows, [NetFilter SDK](https://netfiltersdk.com/) |
 
 ## Configuration
 

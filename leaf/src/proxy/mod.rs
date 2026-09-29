@@ -50,10 +50,14 @@ pub mod direct;
 pub mod drop;
 #[cfg(feature = "outbound-failover")]
 pub mod failover;
+#[cfg(any(feature = "inbound-finalmask", feature = "outbound-finalmask"))]
+pub mod finalmask;
 #[cfg(feature = "inbound-hc")]
 pub mod hc;
 #[cfg(feature = "inbound-http")]
 pub mod http;
+#[cfg(any(feature = "inbound-hysteria2", feature = "outbound-hysteria2"))]
+pub mod hysteria2;
 #[cfg(any(feature = "inbound-mptp", feature = "outbound-mptp"))]
 pub mod mptp;
 #[cfg(feature = "outbound-obfs")]
@@ -88,6 +92,8 @@ pub mod vless;
 pub mod vmess;
 #[cfg(any(feature = "inbound-ws", feature = "outbound-ws"))]
 pub mod ws;
+#[cfg(any(feature = "inbound-xhttp", feature = "outbound-xhttp"))]
+pub mod xhttp;
 
 pub use datagram::*;
 

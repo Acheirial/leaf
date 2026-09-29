@@ -143,6 +143,77 @@ message HcInboundSettings {
 	string response = 3;
 }
 
+message VlessUser {
+	optional string id = 1;
+	optional string flow = 2;
+	optional string encryption = 3;
+	optional string level = 4;
+}
+
+message VlessFallback {
+	optional string name = 1;
+	optional string alpn = 2;
+	optional string path = 3;
+	optional string type = 4;
+	optional string dest = 5;
+	optional uint32 xver = 6;
+}
+
+message VlessInboundSettings {
+	repeated string users = 1;
+	repeated VlessUser user_objects = 2;
+	optional string decryption = 3;
+	repeated VlessFallback fallbacks = 4;
+}
+
+message RealityInboundSettings {
+	optional string dest = 1;
+	repeated string server_names = 2;
+	optional string private_key = 3;
+	repeated string short_ids = 4;
+	optional bool show = 5;
+	optional uint32 xver = 6;
+	repeated string target = 7;
+	optional uint32 max_time_diff_ms = 8;
+}
+
+message XhttpInboundSettings {
+	optional string host = 1;
+	optional string path = 2;
+	optional string mode = 3;
+	optional string extra = 4;
+	optional string download_settings = 5;
+	optional uint32 max_upload_size = 6;
+}
+
+message FinalmaskMask {
+	optional string mask_type = 1;
+	optional string settings = 2;
+}
+
+message FinalmaskInboundSettings {
+	repeated FinalmaskMask tcp = 1;
+	repeated FinalmaskMask udp = 2;
+	optional string tcp_template = 3;
+	optional string udp_template = 4;
+}
+
+message Hysteria2InboundSettings {
+	optional string password = 1;
+	optional string obfs = 2;
+	optional string obfs_password = 3;
+	optional string masquerade = 4;
+	optional string masquerade_file = 5;
+	optional string masquerade_string = 6;
+	optional uint64 up_mbps = 7;
+	optional uint64 down_mbps = 8;
+	optional bool ignore_client_bandwidth = 9;
+	optional string certificate = 10;
+	optional string certificate_key = 11;
+	optional uint64 udp_idle_timeout = 12;
+	optional uint32 mtu = 13;
+}
+
 message Inbound {
 	string tag = 1;
 	string protocol = 2; // TODO use enum
@@ -250,6 +321,7 @@ message VlessOutboundSettings {
     string address = 1;
     uint32 port = 2;
     string uuid = 3;
+    optional string encryption = 20;
 }
 
 message RealityOutboundSettings {
@@ -320,6 +392,35 @@ message SelectOutboundSettings {
 message PluginOutboundSettings {
 	string path = 1;
 	string args = 2;
+}
+
+message XhttpOutboundSettings {
+	optional string host = 1;
+	optional string path = 2;
+	optional string mode = 3;
+	optional string extra = 4;
+	optional uint32 max_upload_size = 5;
+}
+
+message FinalmaskOutboundSettings {
+	repeated FinalmaskMask tcp = 1;
+	repeated FinalmaskMask udp = 2;
+	optional string tcp_template = 3;
+	optional string udp_template = 4;
+}
+
+message Hysteria2OutboundSettings {
+	optional string server = 1;
+	optional string password = 2;
+	optional string obfs = 3;
+	optional string obfs_password = 4;
+	optional string sni = 5;
+	optional bool insecure = 6;
+	optional string alpn = 7;
+	optional uint64 up_mbps = 8;
+	optional uint64 down_mbps = 9;
+	optional uint64 udp_idle_timeout = 10;
+	optional uint32 mtu = 11;
 }
 
 message Outbound {

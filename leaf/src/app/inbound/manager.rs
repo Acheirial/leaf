@@ -13,22 +13,32 @@ use crate::Runner;
 
 #[cfg(feature = "inbound-amux")]
 use crate::proxy::amux;
+#[cfg(feature = "inbound-finalmask")]
+use crate::proxy::finalmask;
 #[cfg(feature = "inbound-hc")]
 use crate::proxy::hc;
 #[cfg(feature = "inbound-http")]
 use crate::proxy::http;
+#[cfg(feature = "inbound-hysteria2")]
+use crate::proxy::hysteria2;
 #[cfg(feature = "inbound-mptp")]
 use crate::proxy::mptp;
 #[cfg(feature = "inbound-quic")]
 use crate::proxy::quic;
+#[cfg(feature = "inbound-reality")]
+use crate::proxy::reality;
 #[cfg(feature = "inbound-socks")]
 use crate::proxy::socks;
 #[cfg(feature = "inbound-tls")]
 use crate::proxy::tls;
 #[cfg(feature = "inbound-tproxy")]
 use crate::proxy::tproxy;
+#[cfg(feature = "inbound-vless")]
+use crate::proxy::vless;
 #[cfg(feature = "inbound-ws")]
 use crate::proxy::ws;
+#[cfg(feature = "inbound-xhttp")]
+use crate::proxy::xhttp;
 
 #[cfg(feature = "inbound-chain")]
 use crate::proxy::chain;
@@ -41,12 +51,17 @@ use super::cat_listener::CatInboundListener;
 #[cfg(feature = "inbound-tun")]
 use super::tun_listener::TunInboundListener;
 
+#[cfg(feature = "inbound-tproxy")]
+use super::tproxy_listener::TproxyInboundListener;
+
 pub struct InboundManager {
     network_listeners: HashMap<String, NetworkInboundListener>,
     #[cfg(feature = "inbound-tun")]
     tun_listener: Option<TunInboundListener>,
     #[cfg(feature = "inbound-cat")]
     cat_listener: Option<CatInboundListener>,
+    #[cfg(feature = "inbound-tproxy")]
+    tproxy_listener: Option<TproxyInboundListener>,
     tun_auto: bool,
 }
 
@@ -173,12 +188,102 @@ impl InboundManager {
                     ));
                     handlers.insert(tag.clone(), handler);
                 }
-                #[cfg(feature = "inbound-tproxy")]
-                "tproxy" => {
+                #[cfg(feature = "inbound-vless")]
+                "vless" => {
+                    let settings = config::VlessInboundSettings::parse_from_bytes(&inbound.settings)
+                        .map_err(|e| anyhow!("invalid [{}] inbound settings: {}", &tag, e))?;
+                    let stream = Arc::new(
+                        vless::inbound::StreamHandler::new(&settings).map_err(|e| {
+                            anyhow!("invalid [{}] inbound vless capability: {}", &tag, e)
+                        })?,
+                    );
+                    let datagram = Arc::new(
+                        vless::inbound::DatagramHandler::new(&settings).map_err(|e| {
+                            anyhow!("invalid [{}] inbound vless capability: {}", &tag, e)
+                        })?,
+                    );
+                    let handler = Arc::new(proxy::inbound::Handler::new(
+                        tag.clone(),
+                        Some(stream),
+                        Some(datagram),
+                    ));
+                    handlers.insert(tag.clone(), handler);
+                }
+                #[cfg(feature = "inbound-reality")]
+                "reality" => {
                     let settings =
-                        config::TproxyInboundSettings::parse_from_bytes(&inbound.settings)
+                        config::RealityInboundSettings::parse_from_bytes(&inbound.settings)
                             .map_err(|e| anyhow!("invalid [{}] inbound settings: {}", &tag, e))?;
-                    let handler = Arc::new(tproxy::inbound::Handler::new(&settings, &tag));
+                    let stream = Arc::new(
+                        reality::inbound::StreamHandler::new(&settings).map_err(|e| {
+                            anyhow!("invalid [{}] inbound reality capability: {}", &tag, e)
+                        })?,
+                    );
+                    let handler = Arc::new(proxy::inbound::Handler::new(
+                        tag.clone(),
+                        Some(stream),
+                        None,
+                    ));
+                    handlers.insert(tag.clone(), handler);
+                }
+                #[cfg(feature = "inbound-xhttp")]
+                "xhttp" => {
+                    let settings = config::XhttpInboundSettings::parse_from_bytes(&inbound.settings)
+                        .map_err(|e| anyhow!("invalid [{}] inbound settings: {}", &tag, e))?;
+                    let stream = Arc::new(
+                        xhttp::inbound::StreamHandler::new(&settings).map_err(|e| {
+                            anyhow!("invalid [{}] inbound xhttp capability: {}", &tag, e)
+                        })?,
+                    );
+                    let datagram = Arc::new(
+                        xhttp::inbound::DatagramHandler::new(&settings).map_err(|e| {
+                            anyhow!("invalid [{}] inbound xhttp capability: {}", &tag, e)
+                        })?,
+                    );
+                    let handler = Arc::new(proxy::inbound::Handler::new(
+                        tag.clone(),
+                        Some(stream),
+                        Some(datagram),
+                    ));
+                    handlers.insert(tag.clone(), handler);
+                }
+                #[cfg(feature = "inbound-finalmask")]
+                "finalmask" => {
+                    let settings =
+                        config::FinalmaskInboundSettings::parse_from_bytes(&inbound.settings)
+                            .map_err(|e| anyhow!("invalid [{}] inbound settings: {}", &tag, e))?;
+                    let stream = Arc::new(
+                        finalmask::inbound::StreamHandler::new(&settings).map_err(|e| {
+                            anyhow!("invalid [{}] inbound finalmask capability: {}", &tag, e)
+                        })?,
+                    );
+                    let datagram = Arc::new(
+                        finalmask::inbound::DatagramHandler::new(&settings).map_err(|e| {
+                            anyhow!("invalid [{}] inbound finalmask capability: {}", &tag, e)
+                        })?,
+                    );
+                    let handler = Arc::new(proxy::inbound::Handler::new(
+                        tag.clone(),
+                        Some(stream),
+                        Some(datagram),
+                    ));
+                    handlers.insert(tag.clone(), handler);
+                }
+                #[cfg(feature = "inbound-hysteria2")]
+                "hysteria2" => {
+                    let settings =
+                        config::Hysteria2InboundSettings::parse_from_bytes(&inbound.settings)
+                            .map_err(|e| anyhow!("invalid [{}] inbound settings: {}", &tag, e))?;
+                    let datagram = Arc::new(
+                        hysteria2::inbound::DatagramHandler::new(&settings).map_err(|e| {
+                            anyhow!("invalid [{}] inbound hysteria2 capability: {}", &tag, e)
+                        })?,
+                    );
+                    let handler = Arc::new(proxy::inbound::Handler::new(
+                        tag.clone(),
+                        None,
+                        Some(datagram),
+                    ));
                     handlers.insert(tag.clone(), handler);
                 }
                 _ => (),
@@ -260,6 +365,9 @@ impl InboundManager {
         #[cfg(feature = "inbound-cat")]
         let mut cat_listener: Option<CatInboundListener> = None;
 
+        #[cfg(feature = "inbound-tproxy")]
+        let mut tproxy_listener: Option<TproxyInboundListener> = None;
+
         let mut tun_auto = false;
 
         for inbound in inbounds.iter() {
@@ -286,6 +394,24 @@ impl InboundManager {
                     };
                     cat_listener.replace(listener);
                 }
+                #[cfg(feature = "inbound-tproxy")]
+                "tproxy" => {
+                    let settings =
+                        config::TproxyInboundSettings::parse_from_bytes(&inbound.settings)
+                            .map_err(|e| anyhow!("invalid [{}] inbound settings: {}", &tag, e))?;
+                    let listen_addr =
+                        std::net::SocketAddr::new(inbound.address.parse()?, inbound.port as u16);
+                    let handler: AnyInboundHandler =
+                        Arc::new(tproxy::inbound::Handler::new(&settings, &tag));
+                    let listener = TproxyInboundListener {
+                        handler,
+                        dispatcher: dispatcher.clone(),
+                        nat_manager: nat_manager.clone(),
+                        tcp_addr: listen_addr,
+                        udp_addr: listen_addr,
+                    };
+                    tproxy_listener.replace(listener);
+                }
                 _ => {
                     if let Some(h) = handlers.get(&tag) {
                         let listener = NetworkInboundListener {
@@ -307,6 +433,8 @@ impl InboundManager {
             tun_listener,
             #[cfg(feature = "inbound-cat")]
             cat_listener,
+            #[cfg(feature = "inbound-tproxy")]
+            tproxy_listener,
             tun_auto,
         })
     }
@@ -327,6 +455,14 @@ impl InboundManager {
     #[cfg(feature = "inbound-cat")]
     pub fn get_cat_runner(&self) -> Option<Result<Runner>> {
         self.cat_listener.as_ref().map(CatInboundListener::listen)
+    }
+
+    #[cfg(feature = "inbound-tproxy")]
+    pub fn get_tproxy_runners(&self) -> Result<Vec<Runner>> {
+        match self.tproxy_listener.as_ref() {
+            Some(listener) => listener.listen(),
+            None => Ok(Vec::new()),
+        }
     }
 
     #[cfg(feature = "inbound-tun")]

@@ -30,9 +30,29 @@ const _PROTOBUF_VERSION_CHECK: () = ::protobuf::VERSION_3_6_0;
 pub struct Dns {
     // message fields
     // @@protoc_insertion_point(field:Dns.servers)
-    pub servers: ::std::vec::Vec<::std::string::String>,
+    pub servers: ::std::vec::Vec<DnsServer>,
     // @@protoc_insertion_point(field:Dns.hosts)
     pub hosts: ::std::collections::HashMap<::std::string::String, dns::Ips>,
+    // @@protoc_insertion_point(field:Dns.client_ip)
+    pub client_ip: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:Dns.tag)
+    pub tag: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:Dns.query_strategy)
+    pub query_strategy: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:Dns.disable_cache)
+    pub disable_cache: ::std::option::Option<bool>,
+    // @@protoc_insertion_point(field:Dns.serve_stale)
+    pub serve_stale: ::std::option::Option<bool>,
+    // @@protoc_insertion_point(field:Dns.serve_expired_ttl)
+    pub serve_expired_ttl: ::std::option::Option<u32>,
+    // @@protoc_insertion_point(field:Dns.disable_fallback)
+    pub disable_fallback: ::std::option::Option<bool>,
+    // @@protoc_insertion_point(field:Dns.disable_fallback_if_match)
+    pub disable_fallback_if_match: ::std::option::Option<bool>,
+    // @@protoc_insertion_point(field:Dns.enable_parallel_query)
+    pub enable_parallel_query: ::std::option::Option<bool>,
+    // @@protoc_insertion_point(field:Dns.use_system_hosts)
+    pub use_system_hosts: ::std::option::Option<bool>,
     // special fields
     // @@protoc_insertion_point(special_field:Dns.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -61,7 +81,7 @@ impl ::protobuf::Message for Dns {
         while let Some(tag) = is.read_raw_tag_or_eof()? {
             match tag {
                 10 => {
-                    self.servers.push(is.read_string()?);
+                    self.servers.push(is.read_message()?);
                 },
                 26 => {
                     let len = is.read_raw_varint32()?;
@@ -78,6 +98,36 @@ impl ::protobuf::Message for Dns {
                     is.pop_limit(old_limit);
                     self.hosts.insert(key, value);
                 },
+                34 => {
+                    self.client_ip = ::std::option::Option::Some(is.read_string()?);
+                },
+                42 => {
+                    self.tag = ::std::option::Option::Some(is.read_string()?);
+                },
+                50 => {
+                    self.query_strategy = ::std::option::Option::Some(is.read_string()?);
+                },
+                56 => {
+                    self.disable_cache = ::std::option::Option::Some(is.read_bool()?);
+                },
+                64 => {
+                    self.serve_stale = ::std::option::Option::Some(is.read_bool()?);
+                },
+                72 => {
+                    self.serve_expired_ttl = ::std::option::Option::Some(is.read_uint32()?);
+                },
+                80 => {
+                    self.disable_fallback = ::std::option::Option::Some(is.read_bool()?);
+                },
+                88 => {
+                    self.disable_fallback_if_match = ::std::option::Option::Some(is.read_bool()?);
+                },
+                96 => {
+                    self.enable_parallel_query = ::std::option::Option::Some(is.read_bool()?);
+                },
+                104 => {
+                    self.use_system_hosts = ::std::option::Option::Some(is.read_bool()?);
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -91,7 +141,8 @@ impl ::protobuf::Message for Dns {
     fn compute_size(&self) -> u64 {
         let mut my_size = 0;
         for value in &self.servers {
-            my_size += ::protobuf::rt::string_size(1, &value);
+            let len = value.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
         };
         for (k, v) in &self.hosts {
             let mut entry_size = 0;
@@ -100,6 +151,36 @@ impl ::protobuf::Message for Dns {
             entry_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
             my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(entry_size) + entry_size
         };
+        if let Some(v) = self.client_ip.as_ref() {
+            my_size += ::protobuf::rt::string_size(4, &v);
+        }
+        if let Some(v) = self.tag.as_ref() {
+            my_size += ::protobuf::rt::string_size(5, &v);
+        }
+        if let Some(v) = self.query_strategy.as_ref() {
+            my_size += ::protobuf::rt::string_size(6, &v);
+        }
+        if let Some(v) = self.disable_cache {
+            my_size += 1 + 1;
+        }
+        if let Some(v) = self.serve_stale {
+            my_size += 1 + 1;
+        }
+        if let Some(v) = self.serve_expired_ttl {
+            my_size += ::protobuf::rt::uint32_size(9, v);
+        }
+        if let Some(v) = self.disable_fallback {
+            my_size += 1 + 1;
+        }
+        if let Some(v) = self.disable_fallback_if_match {
+            my_size += 1 + 1;
+        }
+        if let Some(v) = self.enable_parallel_query {
+            my_size += 1 + 1;
+        }
+        if let Some(v) = self.use_system_hosts {
+            my_size += 1 + 1;
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -107,7 +188,7 @@ impl ::protobuf::Message for Dns {
 
     fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
         for v in &self.servers {
-            os.write_string(1, &v)?;
+            ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
         };
         for (k, v) in &self.hosts {
             let mut entry_size = 0;
@@ -119,6 +200,36 @@ impl ::protobuf::Message for Dns {
             os.write_string(1, &k)?;
             ::protobuf::rt::write_message_field_with_cached_size(2, v, os)?;
         };
+        if let Some(v) = self.client_ip.as_ref() {
+            os.write_string(4, v)?;
+        }
+        if let Some(v) = self.tag.as_ref() {
+            os.write_string(5, v)?;
+        }
+        if let Some(v) = self.query_strategy.as_ref() {
+            os.write_string(6, v)?;
+        }
+        if let Some(v) = self.disable_cache {
+            os.write_bool(7, v)?;
+        }
+        if let Some(v) = self.serve_stale {
+            os.write_bool(8, v)?;
+        }
+        if let Some(v) = self.serve_expired_ttl {
+            os.write_uint32(9, v)?;
+        }
+        if let Some(v) = self.disable_fallback {
+            os.write_bool(10, v)?;
+        }
+        if let Some(v) = self.disable_fallback_if_match {
+            os.write_bool(11, v)?;
+        }
+        if let Some(v) = self.enable_parallel_query {
+            os.write_bool(12, v)?;
+        }
+        if let Some(v) = self.use_system_hosts {
+            os.write_bool(13, v)?;
+        }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -138,6 +249,16 @@ impl ::protobuf::Message for Dns {
     fn clear(&mut self) {
         self.servers.clear();
         self.hosts.clear();
+        self.client_ip = ::std::option::Option::None;
+        self.tag = ::std::option::Option::None;
+        self.query_strategy = ::std::option::Option::None;
+        self.disable_cache = ::std::option::Option::None;
+        self.serve_stale = ::std::option::Option::None;
+        self.serve_expired_ttl = ::std::option::Option::None;
+        self.disable_fallback = ::std::option::Option::None;
+        self.disable_fallback_if_match = ::std::option::Option::None;
+        self.enable_parallel_query = ::std::option::Option::None;
+        self.use_system_hosts = ::std::option::Option::None;
         self.special_fields.clear();
     }
 
@@ -237,6 +358,252 @@ pub mod dns {
             };
             &instance
         }
+    }
+}
+
+// @@protoc_insertion_point(message:DnsServer)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct DnsServer {
+    // message fields
+    // @@protoc_insertion_point(field:DnsServer.address)
+    pub address: ::std::string::String,
+    // @@protoc_insertion_point(field:DnsServer.port)
+    pub port: ::std::option::Option<u32>,
+    // @@protoc_insertion_point(field:DnsServer.skip_fallback)
+    pub skip_fallback: ::std::option::Option<bool>,
+    // @@protoc_insertion_point(field:DnsServer.domains)
+    pub domains: ::std::vec::Vec<::std::string::String>,
+    // @@protoc_insertion_point(field:DnsServer.expected_ips)
+    pub expected_ips: ::std::vec::Vec<::std::string::String>,
+    // @@protoc_insertion_point(field:DnsServer.unexpected_ips)
+    pub unexpected_ips: ::std::vec::Vec<::std::string::String>,
+    // @@protoc_insertion_point(field:DnsServer.query_strategy)
+    pub query_strategy: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:DnsServer.tag)
+    pub tag: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:DnsServer.timeout_ms)
+    pub timeout_ms: ::std::option::Option<u64>,
+    // @@protoc_insertion_point(field:DnsServer.disable_cache)
+    pub disable_cache: ::std::option::Option<bool>,
+    // @@protoc_insertion_point(field:DnsServer.serve_stale)
+    pub serve_stale: ::std::option::Option<bool>,
+    // @@protoc_insertion_point(field:DnsServer.serve_expired_ttl)
+    pub serve_expired_ttl: ::std::option::Option<u32>,
+    // @@protoc_insertion_point(field:DnsServer.final_query)
+    pub final_query: ::std::option::Option<bool>,
+    // special fields
+    // @@protoc_insertion_point(special_field:DnsServer.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a DnsServer {
+    fn default() -> &'a DnsServer {
+        <DnsServer as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl DnsServer {
+    pub fn new() -> DnsServer {
+        ::std::default::Default::default()
+    }
+}
+
+impl ::protobuf::Message for DnsServer {
+    const NAME: &'static str = "DnsServer";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.address = is.read_string()?;
+                },
+                16 => {
+                    self.port = ::std::option::Option::Some(is.read_uint32()?);
+                },
+                24 => {
+                    self.skip_fallback = ::std::option::Option::Some(is.read_bool()?);
+                },
+                34 => {
+                    self.domains.push(is.read_string()?);
+                },
+                42 => {
+                    self.expected_ips.push(is.read_string()?);
+                },
+                50 => {
+                    self.unexpected_ips.push(is.read_string()?);
+                },
+                58 => {
+                    self.query_strategy = ::std::option::Option::Some(is.read_string()?);
+                },
+                66 => {
+                    self.tag = ::std::option::Option::Some(is.read_string()?);
+                },
+                72 => {
+                    self.timeout_ms = ::std::option::Option::Some(is.read_uint64()?);
+                },
+                80 => {
+                    self.disable_cache = ::std::option::Option::Some(is.read_bool()?);
+                },
+                88 => {
+                    self.serve_stale = ::std::option::Option::Some(is.read_bool()?);
+                },
+                96 => {
+                    self.serve_expired_ttl = ::std::option::Option::Some(is.read_uint32()?);
+                },
+                104 => {
+                    self.final_query = ::std::option::Option::Some(is.read_bool()?);
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if !self.address.is_empty() {
+            my_size += ::protobuf::rt::string_size(1, &self.address);
+        }
+        if let Some(v) = self.port {
+            my_size += ::protobuf::rt::uint32_size(2, v);
+        }
+        if let Some(v) = self.skip_fallback {
+            my_size += 1 + 1;
+        }
+        for value in &self.domains {
+            my_size += ::protobuf::rt::string_size(4, &value);
+        };
+        for value in &self.expected_ips {
+            my_size += ::protobuf::rt::string_size(5, &value);
+        };
+        for value in &self.unexpected_ips {
+            my_size += ::protobuf::rt::string_size(6, &value);
+        };
+        if let Some(v) = self.query_strategy.as_ref() {
+            my_size += ::protobuf::rt::string_size(7, &v);
+        }
+        if let Some(v) = self.tag.as_ref() {
+            my_size += ::protobuf::rt::string_size(8, &v);
+        }
+        if let Some(v) = self.timeout_ms {
+            my_size += ::protobuf::rt::uint64_size(9, v);
+        }
+        if let Some(v) = self.disable_cache {
+            my_size += 1 + 1;
+        }
+        if let Some(v) = self.serve_stale {
+            my_size += 1 + 1;
+        }
+        if let Some(v) = self.serve_expired_ttl {
+            my_size += ::protobuf::rt::uint32_size(12, v);
+        }
+        if let Some(v) = self.final_query {
+            my_size += 1 + 1;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if !self.address.is_empty() {
+            os.write_string(1, &self.address)?;
+        }
+        if let Some(v) = self.port {
+            os.write_uint32(2, v)?;
+        }
+        if let Some(v) = self.skip_fallback {
+            os.write_bool(3, v)?;
+        }
+        for v in &self.domains {
+            os.write_string(4, &v)?;
+        };
+        for v in &self.expected_ips {
+            os.write_string(5, &v)?;
+        };
+        for v in &self.unexpected_ips {
+            os.write_string(6, &v)?;
+        };
+        if let Some(v) = self.query_strategy.as_ref() {
+            os.write_string(7, v)?;
+        }
+        if let Some(v) = self.tag.as_ref() {
+            os.write_string(8, v)?;
+        }
+        if let Some(v) = self.timeout_ms {
+            os.write_uint64(9, v)?;
+        }
+        if let Some(v) = self.disable_cache {
+            os.write_bool(10, v)?;
+        }
+        if let Some(v) = self.serve_stale {
+            os.write_bool(11, v)?;
+        }
+        if let Some(v) = self.serve_expired_ttl {
+            os.write_uint32(12, v)?;
+        }
+        if let Some(v) = self.final_query {
+            os.write_bool(13, v)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> DnsServer {
+        DnsServer::new()
+    }
+
+    fn clear(&mut self) {
+        self.address.clear();
+        self.port = ::std::option::Option::None;
+        self.skip_fallback = ::std::option::Option::None;
+        self.domains.clear();
+        self.expected_ips.clear();
+        self.unexpected_ips.clear();
+        self.query_strategy = ::std::option::Option::None;
+        self.tag = ::std::option::Option::None;
+        self.timeout_ms = ::std::option::Option::None;
+        self.disable_cache = ::std::option::Option::None;
+        self.serve_stale = ::std::option::Option::None;
+        self.serve_expired_ttl = ::std::option::Option::None;
+        self.final_query = ::std::option::Option::None;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static DnsServer {
+        static instance: DnsServer = DnsServer {
+            address: ::std::string::String::new(),
+            port: ::std::option::Option::None,
+            skip_fallback: ::std::option::Option::None,
+            domains: ::std::vec::Vec::new(),
+            expected_ips: ::std::vec::Vec::new(),
+            unexpected_ips: ::std::vec::Vec::new(),
+            query_strategy: ::std::option::Option::None,
+            tag: ::std::option::Option::None,
+            timeout_ms: ::std::option::Option::None,
+            disable_cache: ::std::option::Option::None,
+            serve_stale: ::std::option::Option::None,
+            serve_expired_ttl: ::std::option::Option::None,
+            final_query: ::std::option::Option::None,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
     }
 }
 
@@ -1275,6 +1642,187 @@ impl ::protobuf::Message for QuicInboundSettings {
     }
 }
 
+// @@protoc_insertion_point(message:TlsCertificate)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct TlsCertificate {
+    // message fields
+    // @@protoc_insertion_point(field:TlsCertificate.certificate_file)
+    pub certificate_file: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:TlsCertificate.certificate)
+    pub certificate: ::std::vec::Vec<::std::string::String>,
+    // @@protoc_insertion_point(field:TlsCertificate.key_file)
+    pub key_file: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:TlsCertificate.key)
+    pub key: ::std::vec::Vec<::std::string::String>,
+    // @@protoc_insertion_point(field:TlsCertificate.usage)
+    pub usage: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:TlsCertificate.ocsp_stapling)
+    pub ocsp_stapling: ::std::option::Option<u64>,
+    // @@protoc_insertion_point(field:TlsCertificate.one_time_loading)
+    pub one_time_loading: ::std::option::Option<bool>,
+    // @@protoc_insertion_point(field:TlsCertificate.build_chain)
+    pub build_chain: ::std::option::Option<bool>,
+    // special fields
+    // @@protoc_insertion_point(special_field:TlsCertificate.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a TlsCertificate {
+    fn default() -> &'a TlsCertificate {
+        <TlsCertificate as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TlsCertificate {
+    pub fn new() -> TlsCertificate {
+        ::std::default::Default::default()
+    }
+}
+
+impl ::protobuf::Message for TlsCertificate {
+    const NAME: &'static str = "TlsCertificate";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.certificate_file = ::std::option::Option::Some(is.read_string()?);
+                },
+                18 => {
+                    self.certificate.push(is.read_string()?);
+                },
+                26 => {
+                    self.key_file = ::std::option::Option::Some(is.read_string()?);
+                },
+                34 => {
+                    self.key.push(is.read_string()?);
+                },
+                42 => {
+                    self.usage = ::std::option::Option::Some(is.read_string()?);
+                },
+                48 => {
+                    self.ocsp_stapling = ::std::option::Option::Some(is.read_uint64()?);
+                },
+                56 => {
+                    self.one_time_loading = ::std::option::Option::Some(is.read_bool()?);
+                },
+                64 => {
+                    self.build_chain = ::std::option::Option::Some(is.read_bool()?);
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.certificate_file.as_ref() {
+            my_size += ::protobuf::rt::string_size(1, &v);
+        }
+        for value in &self.certificate {
+            my_size += ::protobuf::rt::string_size(2, &value);
+        };
+        if let Some(v) = self.key_file.as_ref() {
+            my_size += ::protobuf::rt::string_size(3, &v);
+        }
+        for value in &self.key {
+            my_size += ::protobuf::rt::string_size(4, &value);
+        };
+        if let Some(v) = self.usage.as_ref() {
+            my_size += ::protobuf::rt::string_size(5, &v);
+        }
+        if let Some(v) = self.ocsp_stapling {
+            my_size += ::protobuf::rt::uint64_size(6, v);
+        }
+        if let Some(v) = self.one_time_loading {
+            my_size += 1 + 1;
+        }
+        if let Some(v) = self.build_chain {
+            my_size += 1 + 1;
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.certificate_file.as_ref() {
+            os.write_string(1, v)?;
+        }
+        for v in &self.certificate {
+            os.write_string(2, &v)?;
+        };
+        if let Some(v) = self.key_file.as_ref() {
+            os.write_string(3, v)?;
+        }
+        for v in &self.key {
+            os.write_string(4, &v)?;
+        };
+        if let Some(v) = self.usage.as_ref() {
+            os.write_string(5, v)?;
+        }
+        if let Some(v) = self.ocsp_stapling {
+            os.write_uint64(6, v)?;
+        }
+        if let Some(v) = self.one_time_loading {
+            os.write_bool(7, v)?;
+        }
+        if let Some(v) = self.build_chain {
+            os.write_bool(8, v)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> TlsCertificate {
+        TlsCertificate::new()
+    }
+
+    fn clear(&mut self) {
+        self.certificate_file = ::std::option::Option::None;
+        self.certificate.clear();
+        self.key_file = ::std::option::Option::None;
+        self.key.clear();
+        self.usage = ::std::option::Option::None;
+        self.ocsp_stapling = ::std::option::Option::None;
+        self.one_time_loading = ::std::option::Option::None;
+        self.build_chain = ::std::option::Option::None;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static TlsCertificate {
+        static instance: TlsCertificate = TlsCertificate {
+            certificate_file: ::std::option::Option::None,
+            certificate: ::std::vec::Vec::new(),
+            key_file: ::std::option::Option::None,
+            key: ::std::vec::Vec::new(),
+            usage: ::std::option::Option::None,
+            ocsp_stapling: ::std::option::Option::None,
+            one_time_loading: ::std::option::Option::None,
+            build_chain: ::std::option::Option::None,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
 // @@protoc_insertion_point(message:TlsInboundSettings)
 #[derive(PartialEq,Clone,Default,Debug)]
 pub struct TlsInboundSettings {
@@ -1287,6 +1835,18 @@ pub struct TlsInboundSettings {
     pub ech_config: ::std::string::String,
     // @@protoc_insertion_point(field:TlsInboundSettings.ech_key)
     pub ech_key: ::std::string::String,
+    // @@protoc_insertion_point(field:TlsInboundSettings.certificates)
+    pub certificates: ::std::vec::Vec<TlsCertificate>,
+    // @@protoc_insertion_point(field:TlsInboundSettings.reject_unknown_sni)
+    pub reject_unknown_sni: ::std::option::Option<bool>,
+    // @@protoc_insertion_point(field:TlsInboundSettings.ech_server_keys)
+    pub ech_server_keys: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:TlsInboundSettings.min_version)
+    pub min_version: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:TlsInboundSettings.max_version)
+    pub max_version: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:TlsInboundSettings.cipher_suites)
+    pub cipher_suites: ::std::option::Option<::std::string::String>,
     // special fields
     // @@protoc_insertion_point(special_field:TlsInboundSettings.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -1326,6 +1886,24 @@ impl ::protobuf::Message for TlsInboundSettings {
                 34 => {
                     self.ech_key = is.read_string()?;
                 },
+                42 => {
+                    self.certificates.push(is.read_message()?);
+                },
+                48 => {
+                    self.reject_unknown_sni = ::std::option::Option::Some(is.read_bool()?);
+                },
+                58 => {
+                    self.ech_server_keys = ::std::option::Option::Some(is.read_string()?);
+                },
+                66 => {
+                    self.min_version = ::std::option::Option::Some(is.read_string()?);
+                },
+                74 => {
+                    self.max_version = ::std::option::Option::Some(is.read_string()?);
+                },
+                82 => {
+                    self.cipher_suites = ::std::option::Option::Some(is.read_string()?);
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -1350,6 +1928,25 @@ impl ::protobuf::Message for TlsInboundSettings {
         if !self.ech_key.is_empty() {
             my_size += ::protobuf::rt::string_size(4, &self.ech_key);
         }
+        for value in &self.certificates {
+            let len = value.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        };
+        if let Some(v) = self.reject_unknown_sni {
+            my_size += 1 + 1;
+        }
+        if let Some(v) = self.ech_server_keys.as_ref() {
+            my_size += ::protobuf::rt::string_size(7, &v);
+        }
+        if let Some(v) = self.min_version.as_ref() {
+            my_size += ::protobuf::rt::string_size(8, &v);
+        }
+        if let Some(v) = self.max_version.as_ref() {
+            my_size += ::protobuf::rt::string_size(9, &v);
+        }
+        if let Some(v) = self.cipher_suites.as_ref() {
+            my_size += ::protobuf::rt::string_size(10, &v);
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -1367,6 +1964,24 @@ impl ::protobuf::Message for TlsInboundSettings {
         }
         if !self.ech_key.is_empty() {
             os.write_string(4, &self.ech_key)?;
+        }
+        for v in &self.certificates {
+            ::protobuf::rt::write_message_field_with_cached_size(5, v, os)?;
+        };
+        if let Some(v) = self.reject_unknown_sni {
+            os.write_bool(6, v)?;
+        }
+        if let Some(v) = self.ech_server_keys.as_ref() {
+            os.write_string(7, v)?;
+        }
+        if let Some(v) = self.min_version.as_ref() {
+            os.write_string(8, v)?;
+        }
+        if let Some(v) = self.max_version.as_ref() {
+            os.write_string(9, v)?;
+        }
+        if let Some(v) = self.cipher_suites.as_ref() {
+            os.write_string(10, v)?;
         }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
@@ -1389,6 +2004,12 @@ impl ::protobuf::Message for TlsInboundSettings {
         self.certificate_key.clear();
         self.ech_config.clear();
         self.ech_key.clear();
+        self.certificates.clear();
+        self.reject_unknown_sni = ::std::option::Option::None;
+        self.ech_server_keys = ::std::option::Option::None;
+        self.min_version = ::std::option::Option::None;
+        self.max_version = ::std::option::Option::None;
+        self.cipher_suites = ::std::option::Option::None;
         self.special_fields.clear();
     }
 
@@ -1398,6 +2019,12 @@ impl ::protobuf::Message for TlsInboundSettings {
             certificate_key: ::std::string::String::new(),
             ech_config: ::std::string::String::new(),
             ech_key: ::std::string::String::new(),
+            certificates: ::std::vec::Vec::new(),
+            reject_unknown_sni: ::std::option::Option::None,
+            ech_server_keys: ::std::option::Option::None,
+            min_version: ::std::option::Option::None,
+            max_version: ::std::option::Option::None,
+            cipher_suites: ::std::option::Option::None,
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -1564,6 +2191,82 @@ impl ::protobuf::Message for MptpInboundSettings {
 
     fn default_instance() -> &'static MptpInboundSettings {
         static instance: MptpInboundSettings = MptpInboundSettings {
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+// @@protoc_insertion_point(message:TproxyInboundSettings)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct TproxyInboundSettings {
+    // special fields
+    // @@protoc_insertion_point(special_field:TproxyInboundSettings.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a TproxyInboundSettings {
+    fn default() -> &'a TproxyInboundSettings {
+        <TproxyInboundSettings as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl TproxyInboundSettings {
+    pub fn new() -> TproxyInboundSettings {
+        ::std::default::Default::default()
+    }
+}
+
+impl ::protobuf::Message for TproxyInboundSettings {
+    const NAME: &'static str = "TproxyInboundSettings";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> TproxyInboundSettings {
+        TproxyInboundSettings::new()
+    }
+
+    fn clear(&mut self) {
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static TproxyInboundSettings {
+        static instance: TproxyInboundSettings = TproxyInboundSettings {
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -2454,6 +3157,28 @@ pub struct TlsOutboundSettings {
     pub ech: bool,
     // @@protoc_insertion_point(field:TlsOutboundSettings.ech_disable_dns_lookup)
     pub ech_disable_dns_lookup: bool,
+    // @@protoc_insertion_point(field:TlsOutboundSettings.certificates)
+    pub certificates: ::std::vec::Vec<TlsCertificate>,
+    // @@protoc_insertion_point(field:TlsOutboundSettings.pinned_peer_cert_sha256)
+    pub pinned_peer_cert_sha256: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:TlsOutboundSettings.verify_peer_cert_by_name)
+    pub verify_peer_cert_by_name: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:TlsOutboundSettings.min_version)
+    pub min_version: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:TlsOutboundSettings.max_version)
+    pub max_version: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:TlsOutboundSettings.cipher_suites)
+    pub cipher_suites: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:TlsOutboundSettings.curve_preferences)
+    pub curve_preferences: ::std::vec::Vec<::std::string::String>,
+    // @@protoc_insertion_point(field:TlsOutboundSettings.enable_session_resumption)
+    pub enable_session_resumption: ::std::option::Option<bool>,
+    // @@protoc_insertion_point(field:TlsOutboundSettings.disable_system_root)
+    pub disable_system_root: ::std::option::Option<bool>,
+    // @@protoc_insertion_point(field:TlsOutboundSettings.master_key_log)
+    pub master_key_log: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:TlsOutboundSettings.fingerprint)
+    pub fingerprint: ::std::option::Option<::std::string::String>,
     // special fields
     // @@protoc_insertion_point(special_field:TlsOutboundSettings.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -2505,6 +3230,39 @@ impl ::protobuf::Message for TlsOutboundSettings {
                 64 => {
                     self.ech_disable_dns_lookup = is.read_bool()?;
                 },
+                74 => {
+                    self.certificates.push(is.read_message()?);
+                },
+                82 => {
+                    self.pinned_peer_cert_sha256 = ::std::option::Option::Some(is.read_string()?);
+                },
+                90 => {
+                    self.verify_peer_cert_by_name = ::std::option::Option::Some(is.read_string()?);
+                },
+                98 => {
+                    self.min_version = ::std::option::Option::Some(is.read_string()?);
+                },
+                106 => {
+                    self.max_version = ::std::option::Option::Some(is.read_string()?);
+                },
+                114 => {
+                    self.cipher_suites = ::std::option::Option::Some(is.read_string()?);
+                },
+                122 => {
+                    self.curve_preferences.push(is.read_string()?);
+                },
+                128 => {
+                    self.enable_session_resumption = ::std::option::Option::Some(is.read_bool()?);
+                },
+                136 => {
+                    self.disable_system_root = ::std::option::Option::Some(is.read_bool()?);
+                },
+                146 => {
+                    self.master_key_log = ::std::option::Option::Some(is.read_string()?);
+                },
+                154 => {
+                    self.fingerprint = ::std::option::Option::Some(is.read_string()?);
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -2541,6 +3299,40 @@ impl ::protobuf::Message for TlsOutboundSettings {
         if self.ech_disable_dns_lookup != false {
             my_size += 1 + 1;
         }
+        for value in &self.certificates {
+            let len = value.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        };
+        if let Some(v) = self.pinned_peer_cert_sha256.as_ref() {
+            my_size += ::protobuf::rt::string_size(10, &v);
+        }
+        if let Some(v) = self.verify_peer_cert_by_name.as_ref() {
+            my_size += ::protobuf::rt::string_size(11, &v);
+        }
+        if let Some(v) = self.min_version.as_ref() {
+            my_size += ::protobuf::rt::string_size(12, &v);
+        }
+        if let Some(v) = self.max_version.as_ref() {
+            my_size += ::protobuf::rt::string_size(13, &v);
+        }
+        if let Some(v) = self.cipher_suites.as_ref() {
+            my_size += ::protobuf::rt::string_size(14, &v);
+        }
+        for value in &self.curve_preferences {
+            my_size += ::protobuf::rt::string_size(15, &value);
+        };
+        if let Some(v) = self.enable_session_resumption {
+            my_size += 2 + 1;
+        }
+        if let Some(v) = self.disable_system_root {
+            my_size += 2 + 1;
+        }
+        if let Some(v) = self.master_key_log.as_ref() {
+            my_size += ::protobuf::rt::string_size(18, &v);
+        }
+        if let Some(v) = self.fingerprint.as_ref() {
+            my_size += ::protobuf::rt::string_size(19, &v);
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -2571,6 +3363,39 @@ impl ::protobuf::Message for TlsOutboundSettings {
         if self.ech_disable_dns_lookup != false {
             os.write_bool(8, self.ech_disable_dns_lookup)?;
         }
+        for v in &self.certificates {
+            ::protobuf::rt::write_message_field_with_cached_size(9, v, os)?;
+        };
+        if let Some(v) = self.pinned_peer_cert_sha256.as_ref() {
+            os.write_string(10, v)?;
+        }
+        if let Some(v) = self.verify_peer_cert_by_name.as_ref() {
+            os.write_string(11, v)?;
+        }
+        if let Some(v) = self.min_version.as_ref() {
+            os.write_string(12, v)?;
+        }
+        if let Some(v) = self.max_version.as_ref() {
+            os.write_string(13, v)?;
+        }
+        if let Some(v) = self.cipher_suites.as_ref() {
+            os.write_string(14, v)?;
+        }
+        for v in &self.curve_preferences {
+            os.write_string(15, &v)?;
+        };
+        if let Some(v) = self.enable_session_resumption {
+            os.write_bool(16, v)?;
+        }
+        if let Some(v) = self.disable_system_root {
+            os.write_bool(17, v)?;
+        }
+        if let Some(v) = self.master_key_log.as_ref() {
+            os.write_string(18, v)?;
+        }
+        if let Some(v) = self.fingerprint.as_ref() {
+            os.write_string(19, v)?;
+        }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
     }
@@ -2596,6 +3421,17 @@ impl ::protobuf::Message for TlsOutboundSettings {
         self.ech_config_list.clear();
         self.ech = false;
         self.ech_disable_dns_lookup = false;
+        self.certificates.clear();
+        self.pinned_peer_cert_sha256 = ::std::option::Option::None;
+        self.verify_peer_cert_by_name = ::std::option::Option::None;
+        self.min_version = ::std::option::Option::None;
+        self.max_version = ::std::option::Option::None;
+        self.cipher_suites = ::std::option::Option::None;
+        self.curve_preferences.clear();
+        self.enable_session_resumption = ::std::option::Option::None;
+        self.disable_system_root = ::std::option::Option::None;
+        self.master_key_log = ::std::option::Option::None;
+        self.fingerprint = ::std::option::Option::None;
         self.special_fields.clear();
     }
 
@@ -2609,6 +3445,17 @@ impl ::protobuf::Message for TlsOutboundSettings {
             ech_config_list: ::std::string::String::new(),
             ech: false,
             ech_disable_dns_lookup: false,
+            certificates: ::std::vec::Vec::new(),
+            pinned_peer_cert_sha256: ::std::option::Option::None,
+            verify_peer_cert_by_name: ::std::option::Option::None,
+            min_version: ::std::option::Option::None,
+            max_version: ::std::option::Option::None,
+            cipher_suites: ::std::option::Option::None,
+            curve_preferences: ::std::vec::Vec::new(),
+            enable_session_resumption: ::std::option::Option::None,
+            disable_system_root: ::std::option::Option::None,
+            master_key_log: ::std::option::Option::None,
+            fingerprint: ::std::option::Option::None,
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance

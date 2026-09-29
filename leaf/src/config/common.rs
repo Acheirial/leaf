@@ -34,14 +34,14 @@ pub struct Dns {
 
 /// A DNS server entry, which may be configured either as a plain address string
 /// or as an object with per-server options. Xray writes the plain form.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(untagged)]
 pub enum DnsServer {
     Address(String),
     Server(DnsServerObject),
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct DnsServerObject {
     pub address: String,
     pub port: Option<u16>,
@@ -192,6 +192,111 @@ pub struct TunInboundSettings {
     pub dns_servers: Option<Vec<String>>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct VlessUser {
+    pub id: Option<String>,
+    pub flow: Option<String>,
+    pub encryption: Option<String>,
+    pub level: Option<String>,
+}
+
+/// A VLESS user as written in the config: either a bare UUID string or an
+/// object with per-user options. Xray accepts both forms in the same list.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(untagged)]
+pub enum VlessUserEntry {
+    Id(String),
+    Object(VlessUser),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct VlessFallback {
+    pub name: Option<String>,
+    pub alpn: Option<String>,
+    pub path: Option<String>,
+    #[serde(rename = "type")]
+    pub type_field: Option<String>,
+    pub dest: Option<String>,
+    pub xver: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct VlessInboundSettings {
+    pub users: Option<Vec<VlessUserEntry>>,
+    pub decryption: Option<String>,
+    pub fallbacks: Option<Vec<VlessFallback>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct RealityInboundSettings {
+    pub dest: Option<String>,
+    #[serde(rename = "serverNames", alias = "server_names")]
+    pub server_names: Option<Vec<String>>,
+    #[serde(rename = "privateKey", alias = "private_key")]
+    pub private_key: Option<String>,
+    #[serde(rename = "shortIds", alias = "short_ids")]
+    pub short_ids: Option<Vec<String>>,
+    pub show: Option<bool>,
+    pub xver: Option<u32>,
+    pub target: Option<Vec<String>>,
+    #[serde(rename = "maxTimeDiffMs", alias = "max_time_diff_ms")]
+    pub max_time_diff_ms: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct XhttpInboundSettings {
+    pub host: Option<String>,
+    pub path: Option<String>,
+    pub mode: Option<String>,
+    pub extra: Option<String>,
+    #[serde(rename = "downloadSettings", alias = "download_settings")]
+    pub download_settings: Option<String>,
+    #[serde(rename = "maxUploadSize", alias = "max_upload_size")]
+    pub max_upload_size: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct FinalmaskMask {
+    #[serde(rename = "maskType", alias = "mask_type")]
+    pub mask_type: Option<String>,
+    pub settings: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct FinalmaskInboundSettings {
+    pub tcp: Option<Vec<FinalmaskMask>>,
+    pub udp: Option<Vec<FinalmaskMask>>,
+    #[serde(rename = "tcpTemplate", alias = "tcp_template")]
+    pub tcp_template: Option<String>,
+    #[serde(rename = "udpTemplate", alias = "udp_template")]
+    pub udp_template: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Hysteria2InboundSettings {
+    pub password: Option<String>,
+    pub obfs: Option<String>,
+    #[serde(rename = "obfsPassword", alias = "obfs_password")]
+    pub obfs_password: Option<String>,
+    pub masquerade: Option<String>,
+    #[serde(rename = "masqueradeFile", alias = "masquerade_file")]
+    pub masquerade_file: Option<String>,
+    #[serde(rename = "masqueradeString", alias = "masquerade_string")]
+    pub masquerade_string: Option<String>,
+    #[serde(rename = "upMbps", alias = "up_mbps")]
+    pub up_mbps: Option<u64>,
+    #[serde(rename = "downMbps", alias = "down_mbps")]
+    pub down_mbps: Option<u64>,
+    #[serde(rename = "ignoreClientBandwidth", alias = "ignore_client_bandwidth")]
+    pub ignore_client_bandwidth: Option<bool>,
+    pub certificate: Option<String>,
+    #[serde(rename = "certificateKey", alias = "certificate_key")]
+    pub certificate_key: Option<String>,
+    #[serde(rename = "udpIdleTimeout", alias = "udp_idle_timeout")]
+    pub udp_idle_timeout: Option<u64>,
+    pub mtu: Option<u32>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct RedirectOutboundSettings {
     pub address: Option<String>,
@@ -243,6 +348,7 @@ pub struct VlessOutboundSettings {
     pub address: Option<String>,
     pub port: Option<u16>,
     pub uuid: Option<String>,
+    pub encryption: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -407,6 +513,45 @@ pub struct PluginOutboundSettings {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct XhttpOutboundSettings {
+    pub host: Option<String>,
+    pub path: Option<String>,
+    pub mode: Option<String>,
+    pub extra: Option<String>,
+    #[serde(rename = "maxUploadSize", alias = "max_upload_size")]
+    pub max_upload_size: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct FinalmaskOutboundSettings {
+    pub tcp: Option<Vec<FinalmaskMask>>,
+    pub udp: Option<Vec<FinalmaskMask>>,
+    #[serde(rename = "tcpTemplate", alias = "tcp_template")]
+    pub tcp_template: Option<String>,
+    #[serde(rename = "udpTemplate", alias = "udp_template")]
+    pub udp_template: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Hysteria2OutboundSettings {
+    pub server: Option<String>,
+    pub password: Option<String>,
+    pub obfs: Option<String>,
+    #[serde(rename = "obfsPassword", alias = "obfs_password")]
+    pub obfs_password: Option<String>,
+    pub sni: Option<String>,
+    pub insecure: Option<bool>,
+    pub alpn: Option<String>,
+    #[serde(rename = "upMbps", alias = "up_mbps")]
+    pub up_mbps: Option<u64>,
+    #[serde(rename = "downMbps", alias = "down_mbps")]
+    pub down_mbps: Option<u64>,
+    #[serde(rename = "udpIdleTimeout", alias = "udp_idle_timeout")]
+    pub udp_idle_timeout: Option<u64>,
+    pub mtu: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Inbound {
     pub tag: Option<String>,
     pub address: Option<String>,
@@ -458,6 +603,26 @@ pub enum InboundSettings {
     Socks {
         #[serde(default)]
         settings: Option<SocksInboundSettings>,
+    },
+    Vless {
+        #[serde(default)]
+        settings: Option<VlessInboundSettings>,
+    },
+    Reality {
+        #[serde(default)]
+        settings: Option<RealityInboundSettings>,
+    },
+    Xhttp {
+        #[serde(default)]
+        settings: Option<XhttpInboundSettings>,
+    },
+    Finalmask {
+        #[serde(default)]
+        settings: Option<FinalmaskInboundSettings>,
+    },
+    Hysteria2 {
+        #[serde(default)]
+        settings: Option<Hysteria2InboundSettings>,
     },
     Http,
 }
@@ -548,6 +713,18 @@ pub enum OutboundSettings {
     Plugin {
         #[serde(default)]
         settings: Option<PluginOutboundSettings>,
+    },
+    Xhttp {
+        #[serde(default)]
+        settings: Option<XhttpOutboundSettings>,
+    },
+    Finalmask {
+        #[serde(default)]
+        settings: Option<FinalmaskOutboundSettings>,
+    },
+    Hysteria2 {
+        #[serde(default)]
+        settings: Option<Hysteria2OutboundSettings>,
     },
     Direct,
     Drop,
@@ -709,6 +886,20 @@ fn tls_certificate_to_internal(ext: &TlsCertificate) -> internal::TlsCertificate
         certificate.build_chain = Some(build_chain);
     }
     certificate
+}
+
+/// Converts a configured finalmask mask entry into its internal form. The
+/// per-mask `settings` blob is raw JSON that the implementation parses, so it
+/// is written through unchanged.
+fn finalmask_mask_to_internal(ext: &FinalmaskMask) -> internal::FinalmaskMask {
+    let mut mask = internal::FinalmaskMask::new();
+    if let Some(mask_type) = &ext.mask_type {
+        mask.mask_type = Some(mask_type.clone());
+    }
+    if let Some(settings) = &ext.settings {
+        mask.settings = Some(settings.clone());
+    }
+    mask
 }
 
 pub fn to_internal(mut config: Config) -> Result<internal::Config> {
@@ -923,6 +1114,218 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                         }
                         if let Some(ext_password) = &ext_settings.password {
                             settings.password = ext_password.clone();
+                        }
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
+                        inbound.settings = settings;
+                    }
+                    inbounds.push(inbound);
+                }
+                InboundSettings::Vless {
+                    settings: ext_settings,
+                } => {
+                    inbound.protocol = "vless".to_string();
+                    if let Some(ext_settings) = ext_settings {
+                        let mut settings = internal::VlessInboundSettings::new();
+                        if let Some(ext_users) = &ext_settings.users {
+                            for ext_user in ext_users {
+                                match ext_user {
+                                    VlessUserEntry::Id(id) => settings.users.push(id.clone()),
+                                    VlessUserEntry::Object(user) => {
+                                        let mut int_user = internal::VlessUser::new();
+                                        if let Some(id) = &user.id {
+                                            int_user.id = Some(id.clone());
+                                        }
+                                        if let Some(flow) = &user.flow {
+                                            int_user.flow = Some(flow.clone());
+                                        }
+                                        if let Some(encryption) = &user.encryption {
+                                            int_user.encryption = Some(encryption.clone());
+                                        }
+                                        if let Some(level) = &user.level {
+                                            int_user.level = Some(level.clone());
+                                        }
+                                        settings.user_objects.push(int_user);
+                                    }
+                                }
+                            }
+                        }
+                        if let Some(ext_decryption) = &ext_settings.decryption {
+                            settings.decryption = Some(ext_decryption.clone());
+                        }
+                        if let Some(ext_fallbacks) = &ext_settings.fallbacks {
+                            for ext_fallback in ext_fallbacks {
+                                let mut fallback = internal::VlessFallback::new();
+                                if let Some(name) = &ext_fallback.name {
+                                    fallback.name = Some(name.clone());
+                                }
+                                if let Some(alpn) = &ext_fallback.alpn {
+                                    fallback.alpn = Some(alpn.clone());
+                                }
+                                if let Some(path) = &ext_fallback.path {
+                                    fallback.path = Some(path.clone());
+                                }
+                                if let Some(type_field) = &ext_fallback.type_field {
+                                    fallback.type_ = Some(type_field.clone());
+                                }
+                                if let Some(dest) = &ext_fallback.dest {
+                                    fallback.dest = Some(dest.clone());
+                                }
+                                if let Some(xver) = ext_fallback.xver {
+                                    fallback.xver = Some(xver);
+                                }
+                                settings.fallbacks.push(fallback);
+                            }
+                        }
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
+                        inbound.settings = settings;
+                    }
+                    inbounds.push(inbound);
+                }
+                InboundSettings::Reality {
+                    settings: ext_settings,
+                } => {
+                    inbound.protocol = "reality".to_string();
+                    if let Some(ext_settings) = ext_settings {
+                        let mut settings = internal::RealityInboundSettings::new();
+                        if let Some(dest) = &ext_settings.dest {
+                            settings.dest = Some(dest.clone());
+                        }
+                        if let Some(server_names) = &ext_settings.server_names {
+                            settings.server_names.extend_from_slice(server_names);
+                        }
+                        if let Some(private_key) = &ext_settings.private_key {
+                            settings.private_key = Some(private_key.clone());
+                        }
+                        if let Some(short_ids) = &ext_settings.short_ids {
+                            settings.short_ids.extend_from_slice(short_ids);
+                        }
+                        if let Some(show) = ext_settings.show {
+                            settings.show = Some(show);
+                        }
+                        if let Some(xver) = ext_settings.xver {
+                            settings.xver = Some(xver);
+                        }
+                        if let Some(target) = &ext_settings.target {
+                            settings.target.extend_from_slice(target);
+                        }
+                        if let Some(max_time_diff_ms) = ext_settings.max_time_diff_ms {
+                            settings.max_time_diff_ms = Some(max_time_diff_ms);
+                        }
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
+                        inbound.settings = settings;
+                    }
+                    inbounds.push(inbound);
+                }
+                InboundSettings::Xhttp {
+                    settings: ext_settings,
+                } => {
+                    inbound.protocol = "xhttp".to_string();
+                    if let Some(ext_settings) = ext_settings {
+                        let mut settings = internal::XhttpInboundSettings::new();
+                        if let Some(host) = &ext_settings.host {
+                            settings.host = Some(host.clone());
+                        }
+                        if let Some(path) = &ext_settings.path {
+                            settings.path = Some(path.clone());
+                        }
+                        if let Some(mode) = &ext_settings.mode {
+                            settings.mode = Some(mode.clone());
+                        }
+                        if let Some(extra) = &ext_settings.extra {
+                            settings.extra = Some(extra.clone());
+                        }
+                        if let Some(download_settings) = &ext_settings.download_settings {
+                            settings.download_settings = Some(download_settings.clone());
+                        }
+                        if let Some(max_upload_size) = ext_settings.max_upload_size {
+                            settings.max_upload_size = Some(max_upload_size);
+                        }
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
+                        inbound.settings = settings;
+                    }
+                    inbounds.push(inbound);
+                }
+                InboundSettings::Finalmask {
+                    settings: ext_settings,
+                } => {
+                    inbound.protocol = "finalmask".to_string();
+                    if let Some(ext_settings) = ext_settings {
+                        let mut settings = internal::FinalmaskInboundSettings::new();
+                        if let Some(tcp) = &ext_settings.tcp {
+                            for mask in tcp {
+                                settings.tcp.push(finalmask_mask_to_internal(mask));
+                            }
+                        }
+                        if let Some(udp) = &ext_settings.udp {
+                            for mask in udp {
+                                settings.udp.push(finalmask_mask_to_internal(mask));
+                            }
+                        }
+                        if let Some(tcp_template) = &ext_settings.tcp_template {
+                            settings.tcp_template = Some(tcp_template.clone());
+                        }
+                        if let Some(udp_template) = &ext_settings.udp_template {
+                            settings.udp_template = Some(udp_template.clone());
+                        }
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
+                        inbound.settings = settings;
+                    }
+                    inbounds.push(inbound);
+                }
+                InboundSettings::Hysteria2 {
+                    settings: ext_settings,
+                } => {
+                    inbound.protocol = "hysteria2".to_string();
+                    if let Some(ext_settings) = ext_settings {
+                        let mut settings = internal::Hysteria2InboundSettings::new();
+                        if let Some(password) = &ext_settings.password {
+                            settings.password = Some(password.clone());
+                        }
+                        if let Some(obfs) = &ext_settings.obfs {
+                            settings.obfs = Some(obfs.clone());
+                        }
+                        if let Some(obfs_password) = &ext_settings.obfs_password {
+                            settings.obfs_password = Some(obfs_password.clone());
+                        }
+                        if let Some(masquerade) = &ext_settings.masquerade {
+                            settings.masquerade = Some(masquerade.clone());
+                        }
+                        if let Some(masquerade_file) = &ext_settings.masquerade_file {
+                            settings.masquerade_file = Some(masquerade_file.clone());
+                        }
+                        if let Some(masquerade_string) = &ext_settings.masquerade_string {
+                            settings.masquerade_string = Some(masquerade_string.clone());
+                        }
+                        if let Some(up_mbps) = ext_settings.up_mbps {
+                            settings.up_mbps = Some(up_mbps);
+                        }
+                        if let Some(down_mbps) = ext_settings.down_mbps {
+                            settings.down_mbps = Some(down_mbps);
+                        }
+                        if let Some(ignore_client_bandwidth) = ext_settings.ignore_client_bandwidth {
+                            settings.ignore_client_bandwidth = Some(ignore_client_bandwidth);
+                        }
+                        if let Some(certificate) = &ext_settings.certificate {
+                            settings.certificate = Some(certificate.clone());
+                        }
+                        if let Some(certificate_key) = &ext_settings.certificate_key {
+                            settings.certificate_key = Some(certificate_key.clone());
+                        }
+                        if let Some(udp_idle_timeout) = ext_settings.udp_idle_timeout {
+                            settings.udp_idle_timeout = Some(udp_idle_timeout);
+                        }
+                        if let Some(mtu) = ext_settings.mtu {
+                            settings.mtu = Some(mtu);
                         }
                         let settings = settings
                             .write_to_bytes()
@@ -1279,6 +1682,9 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                         if let Some(ext_uuid) = &ext_settings.uuid {
                             settings.uuid = ext_uuid.clone();
                         }
+                        if let Some(ext_encryption) = &ext_settings.encryption {
+                            settings.encryption = Some(ext_encryption.clone());
+                        }
                         let settings = settings
                             .write_to_bytes()
                             .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
@@ -1300,6 +1706,109 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                         }
                         if let Some(ext_short_id) = &ext_settings.short_id {
                             settings.short_id = ext_short_id.clone();
+                        }
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
+                        outbound.settings = settings;
+                    }
+                    outbounds.push(outbound);
+                }
+                OutboundSettings::Xhttp {
+                    settings: ext_settings,
+                } => {
+                    outbound.protocol = "xhttp".to_string();
+                    if let Some(ext_settings) = ext_settings {
+                        let mut settings = internal::XhttpOutboundSettings::new();
+                        if let Some(host) = &ext_settings.host {
+                            settings.host = Some(host.clone());
+                        }
+                        if let Some(path) = &ext_settings.path {
+                            settings.path = Some(path.clone());
+                        }
+                        if let Some(mode) = &ext_settings.mode {
+                            settings.mode = Some(mode.clone());
+                        }
+                        if let Some(extra) = &ext_settings.extra {
+                            settings.extra = Some(extra.clone());
+                        }
+                        if let Some(max_upload_size) = ext_settings.max_upload_size {
+                            settings.max_upload_size = Some(max_upload_size);
+                        }
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
+                        outbound.settings = settings;
+                    }
+                    outbounds.push(outbound);
+                }
+                OutboundSettings::Finalmask {
+                    settings: ext_settings,
+                } => {
+                    outbound.protocol = "finalmask".to_string();
+                    if let Some(ext_settings) = ext_settings {
+                        let mut settings = internal::FinalmaskOutboundSettings::new();
+                        if let Some(tcp) = &ext_settings.tcp {
+                            for mask in tcp {
+                                settings.tcp.push(finalmask_mask_to_internal(mask));
+                            }
+                        }
+                        if let Some(udp) = &ext_settings.udp {
+                            for mask in udp {
+                                settings.udp.push(finalmask_mask_to_internal(mask));
+                            }
+                        }
+                        if let Some(tcp_template) = &ext_settings.tcp_template {
+                            settings.tcp_template = Some(tcp_template.clone());
+                        }
+                        if let Some(udp_template) = &ext_settings.udp_template {
+                            settings.udp_template = Some(udp_template.clone());
+                        }
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
+                        outbound.settings = settings;
+                    }
+                    outbounds.push(outbound);
+                }
+                OutboundSettings::Hysteria2 {
+                    settings: ext_settings,
+                } => {
+                    outbound.protocol = "hysteria2".to_string();
+                    if let Some(ext_settings) = ext_settings {
+                        let mut settings = internal::Hysteria2OutboundSettings::new();
+                        if let Some(server) = &ext_settings.server {
+                            settings.server = Some(server.clone());
+                        }
+                        if let Some(password) = &ext_settings.password {
+                            settings.password = Some(password.clone());
+                        }
+                        if let Some(obfs) = &ext_settings.obfs {
+                            settings.obfs = Some(obfs.clone());
+                        }
+                        if let Some(obfs_password) = &ext_settings.obfs_password {
+                            settings.obfs_password = Some(obfs_password.clone());
+                        }
+                        if let Some(sni) = &ext_settings.sni {
+                            settings.sni = Some(sni.clone());
+                        }
+                        if let Some(insecure) = ext_settings.insecure {
+                            settings.insecure = Some(insecure);
+                        }
+                        if let Some(alpn) = &ext_settings.alpn {
+                            settings.alpn = Some(alpn.clone());
+                        }
+                        if let Some(up_mbps) = ext_settings.up_mbps {
+                            settings.up_mbps = Some(up_mbps);
+                        }
+                        if let Some(down_mbps) = ext_settings.down_mbps {
+                            settings.down_mbps = Some(down_mbps);
+                        }
+                        if let Some(udp_idle_timeout) = ext_settings.udp_idle_timeout {
+                            settings.udp_idle_timeout = Some(udp_idle_timeout);
+                        }
+                        if let Some(mtu) = ext_settings.mtu {
+                            settings.mtu = Some(mtu);
                         }
                         let settings = settings
                             .write_to_bytes()

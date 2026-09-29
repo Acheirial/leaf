@@ -1,17 +1,19 @@
 use std::collections::HashMap;
 use std::fmt;
+use std::future::Future;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
 use std::num::NonZeroUsize;
 use std::str::FromStr;
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Result};
 use async_recursion::async_recursion;
-use futures::future::select_ok;
+use hickory_proto::rr::rdata::opt::EdnsOption;
 use hickory_proto::{
     op::{
-        header::MessageType, op_code::OpCode, query::Query, response_code::ResponseCode, Message,
+        header::MessageType, op_code::OpCode, query::Query, response_code::ResponseCode, Edns,
+        Message,
     },
     rr::{record_data::RData, record_type::RecordType, Name},
 };
@@ -23,6 +25,7 @@ use tokio::sync::Mutex as TokioMutex;
 use tokio::time::timeout;
 use tracing::{debug, trace, warn, Instrument};
 
+#[cfg(feature = "dns-tls")]
 #[cfg(feature = "rustls-tls")]
 use {
     std::sync::Arc as SyncArc,
@@ -32,7 +35,11 @@ use {
     },
 };
 
-#[cfg(all(not(feature = "rustls-tls"), feature = "openssl-tls"))]
+#[cfg(all(
+    feature = "dns-tls",
+    not(feature = "rustls-tls"),
+    feature = "openssl-tls"
+))]
 use {
     futures::TryFutureExt,
     openssl::ssl::{Ssl, SslConnector, SslMethod},
@@ -42,14 +49,313 @@ use {
 
 use crate::{app::dispatcher::Dispatcher, option, proxy::*, session::*};
 include!("client/types.rs");
+include!("client/rules.rs");
+include!("client/selector.rs");
 
 impl DnsClient {
-    fn load_servers(dns: &crate::config::Dns) -> Result<Vec<Resolver>> {
+    // ---------------------------------------------------------------- config
+
+    /// Parses one name server address using Xray's grammar.
+    fn parse_server(server: &str) -> Result<Resolver> {
+        let (server, is_direct) = if let Some(rest) = server.strip_prefix("direct:") {
+            (rest, true)
+        } else {
+            (server, false)
+        };
+        let server = server.trim();
+        if server.is_empty() {
+            return Err(anyhow!("empty dns server address"));
+        }
+        let lower = server.to_ascii_lowercase();
+
+        if lower == "localhost" || lower == "system" {
+            return Ok(Resolver::System(is_direct));
+        }
+        if lower == "fakedns" {
+            return Ok(Resolver::FakeDns);
+        }
+        if lower.starts_with("doh:") {
+            return Self::parse_legacy_doh(server, is_direct);
+        }
+        if let Some((scheme, rest)) = server.split_once("://") {
+            return Self::parse_scheme(scheme, rest, is_direct);
+        }
+
+        // Bare `host[:port]` is UDP classic DNS.
+        Ok(Resolver::Server(Self::parse_ip_host_port(server, 53)?, is_direct))
+    }
+
+    fn parse_scheme(scheme: &str, rest: &str, is_direct: bool) -> Result<Resolver> {
+        match scheme.to_ascii_lowercase().as_str() {
+            "udp" => Ok(Resolver::Server(
+                Self::parse_ip_host_port(rest, 53)?,
+                is_direct,
+            )),
+            "tcp" => Ok(Resolver::Tcp(
+                Self::parse_ip_host_port(rest, 53)?,
+                is_direct,
+            )),
+            "tcp+local" => Ok(Resolver::Tcp(Self::parse_ip_host_port(rest, 53)?, true)),
+            "https" => {
+                #[cfg(feature = "dns-tls")]
+                {
+                    Self::parse_doh(rest, 443, false, is_direct)
+                }
+                #[cfg(not(feature = "dns-tls"))]
+                {
+                    let _ = (rest, is_direct);
+                    Err(anyhow!(
+                        "dns server [https://{}] requires the \"dns-tls\" feature",
+                        rest
+                    ))
+                }
+            }
+            "https+local" => {
+                #[cfg(feature = "dns-tls")]
+                {
+                    Self::parse_doh(rest, 443, false, true)
+                }
+                #[cfg(not(feature = "dns-tls"))]
+                {
+                    let _ = rest;
+                    Err(anyhow!(
+                        "dns server [https+local://{}] requires the \"dns-tls\" feature",
+                        rest
+                    ))
+                }
+            }
+            "h2c" => Self::parse_doh(rest, 80, true, is_direct),
+            "h2c+local" => Self::parse_doh(rest, 80, true, true),
+            "quic+local" => {
+                #[cfg(feature = "dns-quic")]
+                {
+                    let (host, port) = Self::split_authority(rest, 853)?;
+                    Ok(Resolver::Quic(QuicResolver { host, port }))
+                }
+                #[cfg(not(feature = "dns-quic"))]
+                {
+                    let _ = rest;
+                    Err(anyhow!(
+                        "dns server [quic+local://{}] requires the \"dns-quic\" feature",
+                        rest
+                    ))
+                }
+            }
+            other => Err(anyhow!(
+                "unsupported dns server scheme [{}://] in [{}://{}]",
+                other,
+                other,
+                rest
+            )),
+        }
+    }
+
+    /// `https://` / `h2c://` / `...+local://` DoH server description.
+    fn parse_doh(rest: &str, default_port: u16, is_h2c: bool, is_direct: bool) -> Result<Resolver> {
+        let (authority, path) = match rest.find('/') {
+            Some(idx) => (&rest[..idx], &rest[idx..]),
+            None => (rest, "/dns-query"),
+        };
+        if authority.is_empty() {
+            return Err(anyhow!("invalid dns server [{}]: empty host", rest));
+        }
+        let (host, port) = Self::split_authority(authority, default_port)?;
+        if host.parse::<IpAddr>().is_err() {
+            let mut fqdn = host.clone();
+            fqdn.push('.');
+            Name::from_str(&fqdn)
+                .map_err(|e| anyhow!("invalid dns server host [{}]: {}", host, e))?;
+        }
+        let path = if path.is_empty() {
+            "/dns-query".to_owned()
+        } else {
+            path.to_owned()
+        };
+        Ok(Resolver::DoH(DohResolver {
+            domain: host,
+            bootstrap_ip: None,
+            port,
+            path,
+            is_h2c,
+            is_direct,
+        }))
+    }
+
+    /// The legacy in-tree `doh:domain[@bootstrap-ip]` spelling.
+    fn parse_legacy_doh(server: &str, is_direct: bool) -> Result<Resolver> {
+        #[cfg(feature = "dns-tls")]
+        {
+            let rest = &server[4..];
+            let (domain, ip) = if let Some((domain, ip)) = rest.split_once('@') {
+                (domain, Some(ip))
+            } else {
+                (rest, None)
+            };
+            if domain.is_empty() {
+                return Err(anyhow!("invalid dns server [doh:{}]: empty doh domain", rest));
+            }
+            let mut fqdn = domain.to_owned();
+            fqdn.push('.');
+            Name::from_str(&fqdn)
+                .map_err(|e| anyhow!("invalid dns server [doh:{}]: {}", rest, e))?;
+            let bootstrap_ip = if let Some(ip) = ip {
+                if ip.is_empty() {
+                    return Err(anyhow!(
+                        "invalid dns server [doh:{}]: empty bootstrap ip",
+                        rest
+                    ));
+                }
+                Some(
+                    ip.parse::<IpAddr>()
+                        .map_err(|e| anyhow!("invalid dns server [doh:{}]: {}", rest, e))?,
+                )
+            } else {
+                None
+            };
+            Ok(Resolver::DoH(DohResolver {
+                domain: domain.to_string(),
+                bootstrap_ip,
+                port: 443,
+                path: "/dns-query".to_owned(),
+                is_h2c: false,
+                is_direct,
+            }))
+        }
+        #[cfg(not(feature = "dns-tls"))]
+        {
+            let _ = is_direct;
+            Err(anyhow!(
+                "dns server [{}] requires the \"dns-tls\" feature",
+                server
+            ))
+        }
+    }
+
+    /// Splits `host:port` where `host` is an IP literal, applying `default_port`
+    /// when no port is present.
+    fn parse_ip_host_port(s: &str, default_port: u16) -> Result<SocketAddr> {
+        let (host, port) = Self::split_authority(s, default_port)?;
+        let ip = host
+            .parse::<IpAddr>()
+            .map_err(|e| anyhow!("invalid dns server [{}]: {}", s, e))?;
+        Ok(SocketAddr::new(ip, port))
+    }
+
+    /// Splits an `[v6]:port`, `host:port` or `host` authority.
+    fn split_authority(authority: &str, default_port: u16) -> Result<(String, u16)> {
+        let authority = authority.trim();
+        if authority.is_empty() {
+            return Err(anyhow!("empty host"));
+        }
+        if let Some(rest) = authority.strip_prefix('[') {
+            let end = rest
+                .find(']')
+                .ok_or_else(|| anyhow!("invalid host [{}]", authority))?;
+            let host = rest[..end].to_owned();
+            let after = &rest[end + 1..];
+            let port = if let Some(port) = after.strip_prefix(':') {
+                port.parse::<u16>()
+                    .map_err(|e| anyhow!("invalid port [{}]: {}", port, e))?
+            } else {
+                default_port
+            };
+            return Ok((host, port));
+        }
+        if authority.matches(':').count() == 1 {
+            if let Some((host, port)) = authority.rsplit_once(':') {
+                let port = port
+                    .parse::<u16>()
+                    .map_err(|e| anyhow!("invalid port [{}]: {}", port, e))?;
+                return Ok((host.to_owned(), port));
+            }
+        }
+        Ok((authority.to_owned(), default_port))
+    }
+
+    /// The equality key Xray computes in `buildPolicyID`, used by `make_groups`.
+    fn build_policy_key(server: &crate::config::DnsServer) -> String {
+        fn normalized(list: &[String]) -> String {
+            let mut items: Vec<String> = list
+                .iter()
+                .map(|s| s.trim().to_lowercase())
+                .filter(|s| !s.is_empty())
+                .collect();
+            items.sort();
+            items.join(",")
+        }
+        format!(
+            "client=none|skip={}|qs={}|tag={}|domains={}|expected={}|unexpected={}",
+            server.skip_fallback.unwrap_or(false) as u8,
+            server.query_strategy.as_deref().unwrap_or("").trim().to_lowercase(),
+            server.tag.as_deref().unwrap_or("").trim().to_lowercase(),
+            normalized(&server.domains),
+            normalized(&server.expected_ips),
+            normalized(&server.unexpected_ips),
+        )
+    }
+
+    fn build_ns_client(
+        server: &crate::config::DnsServer,
+        dns: &crate::config::Dns,
+        default_tag: &str,
+    ) -> Result<NsClient> {
+        let mut resolver = Self::parse_server(&server.address)?;
+        if let Some(port) = server.port {
+            if port == 0 || port > u16::MAX as u32 {
+                return Err(anyhow!("invalid dns server port [{}]", port));
+            }
+            resolver.with_port(port as u16);
+        }
+        let domains = parse_domain_rules(&server.domains)?;
+        let (expected, act_prior) = IpMatcher::parse(&server.expected_ips)?;
+        let (unexpected, act_unprior) = IpMatcher::parse(&server.unexpected_ips)?;
+        let strategy = server.query_strategy.as_ref().map(|s| QueryStrategy::parse(s));
+        let tag = server
+            .tag
+            .as_ref()
+            .filter(|t| !t.is_empty())
+            .cloned()
+            .unwrap_or_else(|| default_tag.to_owned());
+        let timeout = server
+            .timeout_ms
+            .filter(|v| *v > 0)
+            .map(Duration::from_millis)
+            .unwrap_or_else(|| Duration::from_secs(*option::DNS_TIMEOUT));
+        let disable_cache = server
+            .disable_cache
+            .unwrap_or_else(|| dns.disable_cache.unwrap_or(false));
+        let serve_stale = server
+            .serve_stale
+            .unwrap_or_else(|| dns.serve_stale.unwrap_or(false));
+        let serve_expired_ttl = server
+            .serve_expired_ttl
+            .unwrap_or_else(|| dns.serve_expired_ttl.unwrap_or(0));
+        let policy_key = Self::build_policy_key(server);
+        Ok(NsClient {
+            resolver,
+            domains,
+            expected,
+            unexpected,
+            act_prior,
+            act_unprior,
+            strategy,
+            tag,
+            timeout,
+            disable_cache,
+            serve_stale,
+            serve_expired_ttl,
+            final_query: server.final_query.unwrap_or(false),
+            skip_fallback: server.skip_fallback.unwrap_or(false),
+            policy_key,
+        })
+    }
+
+    fn load_servers(dns: &crate::config::Dns, default_tag: &str) -> Result<Vec<NsClient>> {
         let mut servers = Vec::new();
         for server in dns.servers.iter() {
-            match Self::parse_server(server) {
-                Ok(parsed) => servers.push(parsed),
-                Err(err) => warn!("skip invalid dns server [{}]: {}", server, err),
+            match Self::build_ns_client(server, dns, default_tag) {
+                Ok(client) => servers.push(client),
+                Err(err) => warn!("skip invalid dns server [{}]: {}", server.address, err),
             }
         }
         for server in &servers {
@@ -61,87 +367,336 @@ impl DnsClient {
         Ok(servers)
     }
 
-    fn parse_server(server: &str) -> Result<Resolver> {
-        let server_lower = server.to_ascii_lowercase();
-        let (server, is_direct) = if server_lower.starts_with("direct:") {
-            (&server[7..], true)
-        } else {
-            (server, false)
-        };
-        if server.eq_ignore_ascii_case("system") {
-            return Ok(Resolver::System(is_direct));
+    fn load_hosts(dns: &crate::config::Dns) -> HashMap<String, Vec<IpAddr>> {
+        let mut parsed_hosts = HashMap::new();
+        for (name, ips) in dns.hosts.iter() {
+            let mut parsed = Vec::new();
+            for ip in &ips.values {
+                if let Ok(ip) = ip.parse::<IpAddr>() {
+                    parsed.push(ip);
+                }
+            }
+            parsed_hosts.insert(name.to_owned(), parsed);
         }
-        if server.to_ascii_lowercase().starts_with("doh:") {
-            return Self::parse_doh_server(server, is_direct);
-        }
-        let ip = server
-            .parse::<IpAddr>()
-            .map_err(|e| anyhow!("invalid dns server [{}]: {}", server, e))?;
-        Ok(Resolver::Server(SocketAddr::new(ip, 53), is_direct))
+        parsed_hosts
     }
 
-    fn parse_doh_server(server: &str, is_direct: bool) -> Result<Resolver> {
-        let server = &server[4..];
-        let (domain, ip) = if let Some((domain, ip)) = server.split_once('@') {
-            (domain, Some(ip))
-        } else {
-            (server, None)
-        };
-        if domain.is_empty() {
-            return Err(anyhow!(
-                "invalid dns server [doh:{}]: empty doh domain",
-                server
-            ));
-        }
-        let mut fqdn = domain.to_owned();
-        fqdn.push('.');
-        Name::from_str(&fqdn).map_err(|e| anyhow!("invalid dns server [doh:{}]: {}", server, e))?;
-        let bootstrap_ip = if let Some(ip) = ip {
-            if ip.is_empty() {
-                return Err(anyhow!(
-                    "invalid dns server [doh:{}]: empty bootstrap ip",
-                    server
-                ));
+    /// Reads the OS hosts file, mirroring Xray's `readSystemHosts`.
+    fn load_system_hosts() -> HashMap<String, Vec<IpAddr>> {
+        let path = Self::system_hosts_path();
+        let content = match std::fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(e) => {
+                warn!("read system hosts [{}] failed: {}", path.display(), e);
+                return HashMap::new();
             }
-            Some(
-                ip.parse::<IpAddr>()
-                    .map_err(|e| anyhow!("invalid dns server [doh:{}]: {}", server, e))?,
-            )
-        } else {
-            None
         };
-        Ok(Resolver::DoH(DohResolver {
-            domain: domain.to_string(),
-            bootstrap_ip,
-            is_direct,
-        }))
+        let mut hosts: HashMap<String, Vec<IpAddr>> = HashMap::new();
+        for line in content.lines() {
+            let line = line.split('#').next().unwrap_or("");
+            let mut fields = line.split_whitespace();
+            let Some(addr) = fields.next() else {
+                continue;
+            };
+            let Ok(ip) = addr.parse::<IpAddr>() else {
+                continue;
+            };
+            for host in fields {
+                let host = host.trim_end_matches('.').to_lowercase();
+                if host.is_empty() {
+                    continue;
+                }
+                hosts.entry(host).or_default().push(ip);
+            }
+        }
+        hosts
     }
+
+    #[cfg(target_os = "windows")]
+    fn system_hosts_path() -> std::path::PathBuf {
+        let root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_owned());
+        std::path::Path::new(&root)
+            .join("System32")
+            .join("drivers")
+            .join("etc")
+            .join("hosts")
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn system_hosts_path() -> std::path::PathBuf {
+        std::path::PathBuf::from("/etc/hosts")
+    }
+
+    pub fn new(dns: &protobuf::MessageField<crate::config::Dns>) -> Result<Self> {
+        let dns = if let Some(dns) = dns.as_ref() {
+            dns
+        } else {
+            return Err(anyhow!("empty dns config"));
+        };
+        let default_tag = dns
+            .tag
+            .as_ref()
+            .filter(|t| !t.is_empty())
+            .cloned()
+            .unwrap_or_else(|| "dnsclient".to_owned());
+        let servers = Self::load_servers(dns, &default_tag)?;
+        let mut hosts = Self::load_hosts(dns);
+        if dns.use_system_hosts.unwrap_or(false) {
+            for (name, ips) in Self::load_system_hosts() {
+                hosts.entry(name).or_insert(ips);
+            }
+        }
+        let client_ip = match dns.client_ip.as_deref() {
+            Some(value) if !value.is_empty() => Some(
+                value
+                    .parse::<IpAddr>()
+                    .map_err(|e| anyhow!("invalid dns client_ip [{}]: {}", value, e))?,
+            ),
+            _ => None,
+        };
+        let query_strategy = dns
+            .query_strategy
+            .as_ref()
+            .map(|s| QueryStrategy::parse(s))
+            .unwrap_or(QueryStrategy::UseIp);
+        let ipv4_cache = Arc::new(TokioMutex::new(LruCache::<String, CacheEntry>::new(
+            NonZeroUsize::new(*option::DNS_CACHE_SIZE).unwrap(),
+        )));
+        let ipv6_cache = Arc::new(TokioMutex::new(LruCache::<String, CacheEntry>::new(
+            NonZeroUsize::new(*option::DNS_CACHE_SIZE).unwrap(),
+        )));
+        let ech_cache = Arc::new(TokioMutex::new(LruCache::<String, EchCacheEntry>::new(
+            NonZeroUsize::new(*option::DNS_CACHE_SIZE).unwrap(),
+        )));
+
+        Ok(Self {
+            dispatcher: None,
+            servers,
+            hosts,
+            fakedns: None,
+            client_ip,
+            query_strategy,
+            disable_cache: dns.disable_cache.unwrap_or(false),
+            serve_stale: dns.serve_stale.unwrap_or(false),
+            serve_expired_ttl: dns.serve_expired_ttl.unwrap_or(0),
+            disable_fallback: dns.disable_fallback.unwrap_or(false),
+            disable_fallback_if_match: dns.disable_fallback_if_match.unwrap_or(false),
+            enable_parallel_query: dns.enable_parallel_query.unwrap_or(false),
+            ipv4_cache,
+            ipv6_cache,
+            ech_cache,
+            ech_query_locks: Arc::new(TokioMutex::new(HashMap::new())),
+        })
+    }
+
+    pub fn replace_dispatcher(&mut self, dispatcher: Weak<Dispatcher>) {
+        self.dispatcher.replace(dispatcher);
+    }
+
+    /// Wires the in-process fake-DNS engine used by the `fakedns` server form.
+    pub fn replace_fakedns(&mut self, fakedns: Arc<crate::app::fake_dns::FakeDns>) {
+        self.fakedns.replace(fakedns);
+    }
+
+    pub fn reload(&mut self, dns: &protobuf::MessageField<crate::config::Dns>) -> Result<()> {
+        let dns = if let Some(dns) = dns.as_ref() {
+            dns
+        } else {
+            return Err(anyhow!("empty dns config"));
+        };
+        let default_tag = dns
+            .tag
+            .as_ref()
+            .filter(|t| !t.is_empty())
+            .cloned()
+            .unwrap_or_else(|| "dnsclient".to_owned());
+        let servers = Self::load_servers(dns, &default_tag)?;
+        let mut hosts = Self::load_hosts(dns);
+        if dns.use_system_hosts.unwrap_or(false) {
+            for (name, ips) in Self::load_system_hosts() {
+                hosts.entry(name).or_insert(ips);
+            }
+        }
+        self.servers = servers;
+        self.hosts = hosts;
+        self.disable_cache = dns.disable_cache.unwrap_or(false);
+        self.serve_stale = dns.serve_stale.unwrap_or(false);
+        self.serve_expired_ttl = dns.serve_expired_ttl.unwrap_or(0);
+        self.disable_fallback = dns.disable_fallback.unwrap_or(false);
+        self.disable_fallback_if_match = dns.disable_fallback_if_match.unwrap_or(false);
+        self.enable_parallel_query = dns.enable_parallel_query.unwrap_or(false);
+        self.query_strategy = dns
+            .query_strategy
+            .as_ref()
+            .map(|s| QueryStrategy::parse(s))
+            .unwrap_or(QueryStrategy::UseIp);
+        self.client_ip = match dns.client_ip.as_deref() {
+            Some(value) if !value.is_empty() => Some(
+                value
+                    .parse::<IpAddr>()
+                    .map_err(|e| anyhow!("invalid dns client_ip [{}]: {}", value, e))?,
+            ),
+            _ => None,
+        };
+        Ok(())
+    }
+
+    // ----------------------------------------------------------------- cache
+
+    async fn optimize_cache_ipv4(&self, address: String, connected_ip: IpAddr) {
+        // Nothing to do if the target address is an IP address.
+        if address.parse::<IpAddr>().is_ok() {
+            return;
+        }
+
+        // If the connected IP is not in the first place, we should optimize it.
+        let mut new_entry = if let Some(entry) = self.ipv4_cache.lock().await.get(&address) {
+            if !entry.ips.starts_with(&[connected_ip]) && entry.ips.contains(&connected_ip) {
+                entry.clone()
+            } else {
+                return;
+            }
+        } else {
+            return;
+        };
+
+        // Move failed IPs to the end, the optimized vector starts with the connected IP.
+        if let Ok(idx) = new_entry.ips.binary_search(&connected_ip) {
+            trace!("updates DNS cache item from\n{:#?}", &new_entry);
+            new_entry.ips.rotate_left(idx);
+            trace!("to\n{:#?}", &new_entry);
+            self.ipv4_cache.lock().await.put(address, new_entry);
+            trace!("updated cache");
+        }
+    }
+
+    async fn optimize_cache_ipv6(&self, address: String, connected_ip: IpAddr) {
+        // Nothing to do if the target address is an IP address.
+        if address.parse::<IpAddr>().is_ok() {
+            return;
+        }
+
+        // If the connected IP is not in the first place, we should optimize it.
+        let mut new_entry = if let Some(entry) = self.ipv6_cache.lock().await.get(&address) {
+            if !entry.ips.starts_with(&[connected_ip]) && entry.ips.contains(&connected_ip) {
+                entry.clone()
+            } else {
+                return;
+            }
+        } else {
+            return;
+        };
+
+        // Move failed IPs to the end, the optimized vector starts with the connected IP.
+        if let Ok(idx) = new_entry.ips.binary_search(&connected_ip) {
+            trace!("updates DNS cache item from\n{:#?}", &new_entry);
+            new_entry.ips.rotate_left(idx);
+            trace!("to\n{:#?}", &new_entry);
+            self.ipv6_cache.lock().await.put(address, new_entry);
+            trace!("updated cache");
+        }
+    }
+
+    /// Updates the cache according to the IP address successfully connected.
+    pub async fn optimize_cache(&self, address: String, connected_ip: IpAddr) {
+        match connected_ip {
+            IpAddr::V4(..) => self.optimize_cache_ipv4(address, connected_ip).await,
+            IpAddr::V6(..) => self.optimize_cache_ipv6(address, connected_ip).await,
+        }
+    }
+
+    async fn cache_insert(&self, host: &str, entry: CacheEntry) {
+        if self.disable_cache || entry.ips.is_empty() {
+            return;
+        }
+        match entry.ips[0] {
+            IpAddr::V4(..) => self.ipv4_cache.lock().await.put(host.to_owned(), entry),
+            IpAddr::V6(..) => self.ipv6_cache.lock().await.put(host.to_owned(), entry),
+        };
+    }
+
+    async fn get_cached_ech(&self, host: &str) -> Option<String> {
+        let mut cache = self.ech_cache.lock().await;
+        if let Some(entry) = cache.get(host) {
+            if entry
+                .deadline
+                .checked_duration_since(Instant::now())
+                .is_some()
+            {
+                return Some(entry.ech_config_list.clone());
+            }
+        }
+        cache.pop(host);
+        None
+    }
+
+    async fn get_cached(&self, host: &String) -> Result<Vec<IpAddr>> {
+        let now = Instant::now();
+        let mut cached_ips = Vec::new();
+
+        let fetch_order = match (*crate::option::ENABLE_IPV6, *crate::option::PREFER_IPV6) {
+            (true, true) => vec![&self.ipv6_cache, &self.ipv4_cache],
+            (true, false) => vec![&self.ipv4_cache, &self.ipv6_cache],
+            _ => vec![&self.ipv4_cache],
+        };
+
+        for cache in fetch_order {
+            if let Some(entry) = cache.lock().await.get(host) {
+                if entry.deadline.checked_duration_since(now).is_some() {
+                    cached_ips.extend_from_slice(&entry.ips);
+                } else if self.serve_stale {
+                    let expired = now.saturating_duration_since(entry.deadline);
+                    if self.serve_expired_ttl == 0
+                        || expired < Duration::from_secs(self.serve_expired_ttl as u64)
+                    {
+                        cached_ips.extend_from_slice(&entry.ips);
+                    }
+                }
+            }
+        }
+
+        if cached_ips.is_empty() {
+            Err(anyhow!("empty result"))
+        } else {
+            Ok(cached_ips)
+        }
+    }
+
+    // ------------------------------------------------------------ transports
 
     async fn resolve_doh_bootstrap_addr(
         &self,
         domain: &str,
         bootstrap_ip: Option<IpAddr>,
+        port: u16,
     ) -> Result<SocketAddr> {
         if let Some(ip) = bootstrap_ip {
-            return Ok(SocketAddr::new(ip, 443));
+            return Ok(SocketAddr::new(ip, port));
         }
-        let domain = domain.to_owned();
+        Self::resolve_host_port(domain, port).await
+    }
+
+    async fn resolve_host_port(host: &str, port: u16) -> Result<SocketAddr> {
+        if let Ok(ip) = host.parse::<IpAddr>() {
+            return Ok(SocketAddr::new(ip, port));
+        }
+        let owned = host.to_owned();
         let addr = tokio::task::spawn_blocking(move || {
-            (domain.as_str(), 443)
+            (owned.as_str(), port)
                 .to_socket_addrs()
                 .ok()
                 .and_then(|mut addrs| addrs.next())
         })
         .await
-        .map_err(|e| anyhow!("spawn blocking failed: {}", e))?
-        .ok_or_else(|| anyhow!("bootstrap failed: no resolved address"))?;
-        Ok(addr)
+        .map_err(|e| anyhow!("spawn blocking failed: {}", e))?;
+        addr.ok_or_else(|| anyhow!("bootstrap failed: no resolved address for {}:{}", host, port))
     }
 
     async fn connect_doh_tcp_stream(
         &self,
         doh: &DohResolver,
         bootstrap_addr: SocketAddr,
+        tag: &str,
     ) -> Result<AnyStream> {
         if doh.is_direct {
             let stream = TcpStream::connect(bootstrap_addr).await?;
@@ -157,7 +712,7 @@ impl DnsClient {
                     network: Network::Tcp,
                     source,
                     destination: SocksAddr::from(bootstrap_addr),
-                    inbound_tag: "dnsclient".to_string(),
+                    inbound_tag: tag.to_string(),
                     ..Default::default()
                 };
                 return dispatcher
@@ -170,7 +725,7 @@ impl DnsClient {
         Err(anyhow!("no dispatcher"))
     }
 
-    #[cfg(feature = "rustls-tls")]
+    #[cfg(all(feature = "dns-tls", feature = "rustls-tls"))]
     async fn wrap_doh_tls_stream(stream: AnyStream, server_name: &str) -> Result<AnyStream> {
         let mut roots = RootCertStore::empty();
         roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
@@ -187,7 +742,11 @@ impl DnsClient {
         Ok(Box::new(tls_stream))
     }
 
-    #[cfg(all(not(feature = "rustls-tls"), feature = "openssl-tls"))]
+    #[cfg(all(
+        feature = "dns-tls",
+        not(feature = "rustls-tls"),
+        feature = "openssl-tls"
+    ))]
     async fn wrap_doh_tls_stream(stream: AnyStream, server_name: &str) -> Result<AnyStream> {
         let ssl_connector = SslConnector::builder(SslMethod::tls())
             .map_err(|e| anyhow!("create ssl connector failed: {}", e))?
@@ -205,15 +764,10 @@ impl DnsClient {
         Ok(Box::new(stream))
     }
 
-    #[cfg(not(any(feature = "rustls-tls", feature = "openssl-tls")))]
-    async fn wrap_doh_tls_stream(_stream: AnyStream, _server_name: &str) -> Result<AnyStream> {
-        Err(anyhow!("no tls backend available"))
-    }
-
-    fn build_doh_http_request(domain: &str, body_len: usize) -> String {
+    fn build_doh_http_request(host: &str, path: &str, body_len: usize) -> String {
         format!(
-            "POST /dns-query HTTP/1.1\r\nHost: {}\r\nContent-Type: application/dns-message\r\nAccept: application/dns-message\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-            domain, body_len
+            "POST {} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/dns-message\r\nAccept: application/dns-message\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            path, host, body_len
         )
     }
 
@@ -293,13 +847,16 @@ impl DnsClient {
         Ok(body.to_vec())
     }
 
-    async fn query_doh_message(
+    /// DNS-over-HTTPS over TLS (`https://`, `https+local://`, legacy `doh:`).
+    #[cfg(feature = "dns-tls")]
+    async fn query_with_doh_tls(
         &self,
-        request: &[u8],
+        request: Vec<u8>,
         host: &str,
         resolver: &Resolver,
         doh: &DohResolver,
-    ) -> Result<(Message, Duration)> {
+        tag: &str,
+    ) -> Result<CacheEntry> {
         for i in 0..*option::MAX_DNS_RETRIES {
             let start = tokio::time::Instant::now();
             debug!(
@@ -310,7 +867,7 @@ impl DnsClient {
                 *option::MAX_DNS_RETRIES
             );
             let bootstrap_addr = match self
-                .resolve_doh_bootstrap_addr(&doh.domain, doh.bootstrap_ip)
+                .resolve_doh_bootstrap_addr(&doh.domain, doh.bootstrap_ip, doh.port)
                 .await
             {
                 Ok(addr) => addr,
@@ -319,7 +876,8 @@ impl DnsClient {
                     continue;
                 }
             };
-            let stream = match self.connect_doh_tcp_stream(doh, bootstrap_addr).await {
+            let stream = match self.connect_doh_tcp_stream(doh, bootstrap_addr, tag).await
+            {
                 Ok(stream) => stream,
                 Err(err) => {
                     debug!("connect doh stream failed: {}", err);
@@ -333,12 +891,12 @@ impl DnsClient {
                     continue;
                 }
             };
-            let request_header = Self::build_doh_http_request(&doh.domain, request.len());
+            let request_header = Self::build_doh_http_request(&doh.domain, &doh.path, request.len());
             if let Err(err) = stream.write_all(request_header.as_bytes()).await {
                 debug!("write doh http header failed: {}", err);
                 continue;
             }
-            if let Err(err) = stream.write_all(request).await {
+            if let Err(err) = stream.write_all(&request).await {
                 debug!("write doh message body failed: {}", err);
                 continue;
             }
@@ -365,19 +923,95 @@ impl DnsClient {
                     continue;
                 }
             };
-            if message.response_code() != ResponseCode::NoError {
-                debug!(
-                    "error DNS response from {} for {}: {}",
-                    resolver,
-                    host,
-                    message.response_code()
-                );
-                continue;
-            }
             let elapsed = tokio::time::Instant::now().duration_since(start);
-            return Ok((message, elapsed));
+            match Self::message_to_entry(&message, host, &doh.domain) {
+                Ok(entry) => {
+                    debug!(
+                        "received from server={} ttl={} elapsed={}ms ips={:?}",
+                        resolver,
+                        message.answers().iter().next().map(|a| a.ttl()).unwrap_or(0),
+                        elapsed.as_millis(),
+                        &entry.ips
+                    );
+                    return Ok(entry);
+                }
+                Err(err) => {
+                    debug!("bad doh dns response: {}", err);
+                    continue;
+                }
+            }
         }
         Err(anyhow!("all doh lookup attempts failed"))
+    }
+
+    /// DNS-over-HTTPS over cleartext HTTP/2 (`h2c://`, `h2c+local://`).
+    async fn query_with_doh_h2c(
+        &self,
+        request: Vec<u8>,
+        host: &str,
+        resolver: &Resolver,
+        doh: &DohResolver,
+        tag: &str,
+    ) -> Result<CacheEntry> {
+        for i in 0..*option::MAX_DNS_RETRIES {
+            let start = tokio::time::Instant::now();
+            debug!(
+                "looking up host={} server={} ({}/{})",
+                host,
+                resolver,
+                i + 1,
+                *option::MAX_DNS_RETRIES
+            );
+            let bootstrap_addr = match self
+                .resolve_doh_bootstrap_addr(&doh.domain, doh.bootstrap_ip, doh.port)
+                .await
+            {
+                Ok(addr) => addr,
+                Err(err) => {
+                    debug!("resolve doh bootstrap failed: {}", err);
+                    continue;
+                }
+            };
+            let stream = match self.connect_doh_tcp_stream(doh, bootstrap_addr, tag).await
+            {
+                Ok(stream) => stream,
+                Err(err) => {
+                    debug!("connect doh stream failed: {}", err);
+                    continue;
+                }
+            };
+            let body = match Self::do_h2c_request(stream, &doh.domain, &doh.path, &request).await {
+                Ok(body) => body,
+                Err(err) => {
+                    debug!("h2c request failed: {}", err);
+                    continue;
+                }
+            };
+            let message = match Message::from_vec(&body) {
+                Ok(message) => message,
+                Err(err) => {
+                    debug!("parse h2c dns payload failed: {}", err);
+                    continue;
+                }
+            };
+            let elapsed = tokio::time::Instant::now().duration_since(start);
+            match Self::message_to_entry(&message, host, &doh.domain) {
+                Ok(entry) => {
+                    debug!(
+                        "received from server={} elapsed={}ms ips={:?}",
+                        resolver,
+                        elapsed.as_millis(),
+                        &entry.ips
+                    );
+                    return Ok(entry);
+                }
+                Err(err) => {
+                    debug!("bad h2c dns response: {}", err);
+                    continue;
+                }
+            }
+        }
+        Err(anyhow!("all h2c lookup attempts failed"))
     }
 
     async fn query_with_doh(
@@ -386,222 +1020,490 @@ impl DnsClient {
         host: &str,
         resolver: &Resolver,
         doh: &DohResolver,
+        tag: &str,
     ) -> Result<CacheEntry> {
-        let (resp, elapsed) = self
-            .query_doh_message(&request, host, resolver, doh)
-            .await?;
-        let mut ips = Vec::new();
-        for ans in resp.answers() {
-            if let Some(data) = ans.data() {
-                match data {
-                    RData::A(ip) => ips.push(IpAddr::V4(**ip)),
-                    RData::AAAA(ip) => ips.push(IpAddr::V6(**ip)),
-                    _ => (),
-                }
-            }
+        if doh.is_h2c {
+            return self.query_with_doh_h2c(request, host, resolver, doh, tag).await;
         }
-        if ips.is_empty() {
-            return Err(anyhow!(
-                "no records in DNS response from {} for {}",
-                resolver,
-                host
-            ));
+        #[cfg(feature = "dns-tls")]
+        {
+            self.query_with_doh_tls(request, host, resolver, doh, tag).await
         }
-        let ttl = resp.answers().iter().next().unwrap().ttl();
-        let Some(deadline) = Instant::now().checked_add(Duration::from_secs(ttl.into())) else {
-            return Err(anyhow!("invalid ttl"));
-        };
-        debug!(
-            "received from server={} ttl={} elapsed={}ms ips={:?}",
-            resolver,
-            ttl,
-            elapsed.as_millis(),
-            &ips,
-        );
-        Ok(CacheEntry { ips, deadline })
+        #[cfg(not(feature = "dns-tls"))]
+        {
+            let _ = (request, host, resolver, doh, tag);
+            Err(anyhow!("https dns server requires the \"dns-tls\" feature"))
+        }
     }
 
-    async fn query_ech_with_doh(
+    /// Minimal HTTP/2 (RFC 7540, prior knowledge) client for a single DoH POST.
+    async fn do_h2c_request(
+        mut stream: AnyStream,
+        host: &str,
+        path: &str,
+        request: &[u8],
+    ) -> Result<Vec<u8>> {
+        const PREFACE: &[u8] = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+        const FRAME_DATA: u8 = 0x0;
+        const FRAME_HEADERS: u8 = 0x1;
+        const FRAME_RST_STREAM: u8 = 0x3;
+        const FRAME_SETTINGS: u8 = 0x4;
+        const FRAME_PING: u8 = 0x6;
+        const FRAME_GOAWAY: u8 = 0x7;
+        const FLAG_END_STREAM: u8 = 0x1;
+        const FLAG_ACK: u8 = 0x1;
+        const FLAG_END_HEADERS: u8 = 0x4;
+
+        fn push_string(buf: &mut Vec<u8>, value: &[u8]) {
+            // Only plain (non-Huffman) strings are produced.
+            let len = value.len();
+            if len < 127 {
+                buf.push(len as u8);
+            } else {
+                buf.push(0x7f);
+                let mut len = len - 127;
+                while len >= 128 {
+                    buf.push(((len & 0x7f) | 0x80) as u8);
+                    len >>= 7;
+                }
+                buf.push(len as u8);
+            }
+            buf.extend_from_slice(value);
+        }
+
+        fn push_indexed_name(buf: &mut Vec<u8>, index: u8, value: &[u8]) {
+            if index < 15 {
+                buf.push(index);
+            } else {
+                buf.push(0x0f);
+                buf.push(index - 15);
+            }
+            push_string(buf, value);
+        }
+
+        fn push_new_name(buf: &mut Vec<u8>, name: &[u8], value: &[u8]) {
+            buf.push(0x00);
+            push_string(buf, name);
+            push_string(buf, value);
+        }
+
+        fn emit_frame(out: &mut Vec<u8>, typ: u8, flags: u8, sid: u32, payload: &[u8]) {
+            let len = payload.len();
+            out.push(((len >> 16) & 0xff) as u8);
+            out.push(((len >> 8) & 0xff) as u8);
+            out.push((len & 0xff) as u8);
+            out.push(typ);
+            out.push(flags);
+            out.extend_from_slice(&(sid & 0x7fff_ffff).to_be_bytes());
+            out.extend_from_slice(payload);
+        }
+
+        // HPACK request header block.
+        let mut hpack = Vec::new();
+        hpack.push(0x83); // :method = POST (static index 3)
+        hpack.push(0x86); // :scheme = http (static index 6)
+        push_indexed_name(&mut hpack, 1, host.as_bytes()); // :authority
+        push_indexed_name(&mut hpack, 4, path.as_bytes()); // :path
+        push_indexed_name(&mut hpack, 31, b"application/dns-message"); // content-type
+        push_new_name(&mut hpack, b"accept", b"application/dns-message");
+        push_indexed_name(&mut hpack, 28, request.len().to_string().as_bytes()); // content-length
+
+        let mut frame = Vec::with_capacity(PREFACE.len() + 9 + hpack.len() + 9 + request.len());
+        frame.extend_from_slice(PREFACE);
+        emit_frame(&mut frame, FRAME_SETTINGS, 0, 0, &[]);
+        emit_frame(&mut frame, FRAME_HEADERS, FLAG_END_HEADERS, 1, &hpack);
+        emit_frame(&mut frame, FRAME_DATA, FLAG_END_STREAM, 1, request);
+        stream
+            .write_all(&frame)
+            .await
+            .map_err(|e| anyhow!("write h2c request failed: {}", e))?;
+        stream
+            .flush()
+            .await
+            .map_err(|e| anyhow!("flush h2c request failed: {}", e))?;
+
+        let mut body = Vec::new();
+        loop {
+            let mut header = [0u8; 9];
+            stream
+                .read_exact(&mut header)
+                .await
+                .map_err(|e| anyhow!("read h2c frame header failed: {}", e))?;
+            let len =
+                ((header[0] as usize) << 16) | ((header[1] as usize) << 8) | header[2] as usize;
+            let typ = header[3];
+            let flags = header[4];
+            let sid = u32::from_be_bytes([header[5] & 0x7f, header[6], header[7], header[8]]);
+            let mut payload = vec![0u8; len];
+            if len > 0 {
+                stream
+                    .read_exact(&mut payload)
+                    .await
+                    .map_err(|e| anyhow!("read h2c frame payload failed: {}", e))?;
+            }
+            match typ {
+                FRAME_DATA => {
+                    if sid == 1 {
+                        body.extend_from_slice(&payload);
+                    }
+                    if flags & FLAG_END_STREAM != 0 {
+                        break;
+                    }
+                }
+                FRAME_HEADERS => {
+                    if flags & FLAG_END_STREAM != 0 {
+                        break;
+                    }
+                }
+                FRAME_SETTINGS => {
+                    if flags & FLAG_ACK == 0 {
+                        let mut ack = Vec::with_capacity(9);
+                        emit_frame(&mut ack, FRAME_SETTINGS, FLAG_ACK, 0, &[]);
+                        stream.write_all(&ack).await?;
+                    }
+                }
+                FRAME_PING => {
+                    if flags & FLAG_ACK == 0 {
+                        let mut ack = Vec::with_capacity(9 + payload.len());
+                        emit_frame(&mut ack, FRAME_PING, FLAG_ACK, 0, &payload);
+                        stream.write_all(&ack).await?;
+                    }
+                }
+                FRAME_RST_STREAM => return Err(anyhow!("h2c stream reset by server")),
+                FRAME_GOAWAY => return Err(anyhow!("h2c connection closed by server")),
+                _ => (),
+            }
+        }
+
+        if body.is_empty() {
+            return Err(anyhow!("h2c server returned an empty body"));
+        }
+        Ok(body)
+    }
+
+    /// UDP dispatch helper shared by the plain DNS transports.
+    async fn open_udp_socket(
         &self,
+        addr: SocketAddr,
+        is_direct: bool,
+        tag: &str,
+    ) -> Result<(Box<dyn OutboundDatagram>, tracing::Span)> {
+        if is_direct {
+            let socket = self.new_udp_socket(&addr).await?;
+            Ok((
+                Box::new(StdOutboundDatagram::new(socket)) as Box<dyn OutboundDatagram>,
+                tracing::Span::current(),
+            ))
+        } else if let Some(dispatcher_weak) = self.dispatcher.as_ref() {
+            let source = match addr {
+                SocketAddr::V4(_) => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
+                SocketAddr::V6(_) => SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
+            };
+            let sess = Session {
+                network: Network::Udp,
+                source,
+                destination: SocksAddr::from(addr),
+                inbound_tag: tag.to_string(),
+                ..Default::default()
+            };
+            let span = sess.span();
+            if let Some(dispatcher) = dispatcher_weak.upgrade() {
+                let datagram = dispatcher
+                    .dispatch_datagram(sess)
+                    .instrument(span.clone())
+                    .await?;
+                Ok((datagram, span))
+            } else {
+                Err(anyhow!("dispatcher is gone"))
+            }
+        } else {
+            Err(anyhow!("no dispatcher"))
+        }
+    }
+
+    async fn query_udp(
+        &self,
+        addr: SocketAddr,
+        is_direct: bool,
         request: Vec<u8>,
         host: &str,
-        resolver: &Resolver,
-        doh: &DohResolver,
-        ty: RecordType,
-    ) -> Result<EchCacheEntry> {
-        let (resp, elapsed) = self
-            .query_doh_message(&request, host, resolver, doh)
-            .await?;
-        let mut last_ttl = None;
-        for ans in resp.answers() {
-            if ans.record_type() != ty {
-                continue;
-            }
-            if let Some(data) = ans.data() {
-                last_ttl = Some(ans.ttl());
-                let value = data.to_string();
-                if let Some(ech_config_list) = Self::extract_ech_config_list(&value) {
-                    let ttl = ans.ttl();
-                    let Some(deadline) =
-                        Instant::now().checked_add(Duration::from_secs(ttl.into()))
-                    else {
-                        return Err(anyhow!("invalid ttl"));
-                    };
-                    debug!(
-                        "received ech from server={} type={} ttl={} elapsed={}ms len={}",
-                        resolver,
-                        ty,
-                        ttl,
-                        elapsed.as_millis(),
-                        ech_config_list.len()
-                    );
-                    return Ok(EchCacheEntry {
-                        ech_config_list,
-                        deadline,
-                    });
-                }
-            }
-        }
-        if last_ttl.is_some() {
-            return Err(anyhow!(
-                "missing ech parameter in {} record for {} from {}",
-                ty,
+        tag: &str,
+    ) -> Result<CacheEntry> {
+        let (socket, span) = self.open_udp_socket(addr, is_direct, tag).await?;
+        self.query_with_socket(socket, request, span, host, addr)
+            .await
+    }
+
+    async fn query_tcp(
+        &self,
+        addr: SocketAddr,
+        is_direct: bool,
+        request: Vec<u8>,
+        host: &str,
+        tag: &str,
+    ) -> Result<CacheEntry> {
+        let mut last_err = anyhow!("tcp query failed");
+        for i in 0..*option::MAX_DNS_RETRIES {
+            debug!(
+                "looking up host={} server=tcp://{} ({}/{})",
                 host,
-                resolver
-            ));
-        }
-        Err(anyhow!("no {} records for {} from {}", ty, host, resolver))
-    }
-
-    fn load_hosts(dns: &crate::config::Dns) -> HashMap<String, Vec<IpAddr>> {
-        let mut hosts = HashMap::new();
-        for (name, ips) in dns.hosts.iter() {
-            hosts.insert(name.to_owned(), ips.values.to_vec());
-        }
-        let mut parsed_hosts = HashMap::new();
-        for (name, static_ips) in hosts.iter() {
-            let mut ips = Vec::new();
-            for ip in static_ips {
-                if let Ok(parsed_ip) = ip.parse::<IpAddr>() {
-                    ips.push(parsed_ip);
+                addr,
+                i + 1,
+                *option::MAX_DNS_RETRIES
+            );
+            let stream = match self.open_tcp_stream(addr, is_direct, tag).await {
+                Ok(stream) => stream,
+                Err(err) => {
+                    debug!("connect tcp dns server failed: {}", err);
+                    last_err = err;
+                    continue;
+                }
+            };
+            match Self::exchange_tcp_message(stream, &request).await {
+                Ok(message) => match Self::message_to_entry(&message, host, &addr) {
+                    Ok(entry) => return Ok(entry),
+                    Err(err) => {
+                        debug!("bad tcp dns response: {}", err);
+                        last_err = err;
+                    }
+                },
+                Err(err) => {
+                    debug!("tcp dns exchange failed: {}", err);
+                    last_err = err;
                 }
             }
-            parsed_hosts.insert(name.to_owned(), ips);
         }
-        parsed_hosts
+        Err(last_err)
     }
 
-    pub fn new(dns: &protobuf::MessageField<crate::config::Dns>) -> Result<Self> {
-        let dns = if let Some(dns) = dns.as_ref() {
-            dns
-        } else {
-            return Err(anyhow!("empty dns config"));
-        };
-        let servers = Self::load_servers(dns)?;
-        let hosts = Self::load_hosts(dns);
-        let ipv4_cache = Arc::new(TokioMutex::new(LruCache::<String, CacheEntry>::new(
-            NonZeroUsize::new(*option::DNS_CACHE_SIZE).unwrap(),
-        )));
-        let ipv6_cache = Arc::new(TokioMutex::new(LruCache::<String, CacheEntry>::new(
-            NonZeroUsize::new(*option::DNS_CACHE_SIZE).unwrap(),
-        )));
-        let ech_cache = Arc::new(TokioMutex::new(LruCache::<String, EchCacheEntry>::new(
-            NonZeroUsize::new(*option::DNS_CACHE_SIZE).unwrap(),
-        )));
+    async fn open_tcp_stream(
+        &self,
+        addr: SocketAddr,
+        is_direct: bool,
+        tag: &str,
+    ) -> Result<AnyStream> {
+        if is_direct {
+            return Ok(Box::new(TcpStream::connect(addr).await?));
+        }
+        if let Some(dispatcher_weak) = self.dispatcher.as_ref() {
+            if let Some(dispatcher) = dispatcher_weak.upgrade() {
+                let source = match addr {
+                    SocketAddr::V4(_) => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
+                    SocketAddr::V6(_) => SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
+                };
+                let sess = Session {
+                    network: Network::Tcp,
+                    source,
+                    destination: SocksAddr::from(addr),
+                    inbound_tag: tag.to_string(),
+                    ..Default::default()
+                };
+                return dispatcher
+                    .dispatch_stream_outbound(sess)
+                    .await
+                    .map_err(|e| anyhow!("dispatch stream failed: {}", e));
+            }
+            return Err(anyhow!("dispatcher is gone"));
+        }
+        Err(anyhow!("no dispatcher"))
+    }
 
-        Ok(Self {
-            dispatcher: None,
-            servers,
-            hosts,
-            ipv4_cache,
-            ipv6_cache,
-            ech_cache,
-            ech_query_locks: Arc::new(TokioMutex::new(HashMap::new())),
-            selector_state: Arc::new(Mutex::new(ServerSelectorState::default())),
+    async fn exchange_tcp_message(mut stream: AnyStream, request: &[u8]) -> Result<Message> {
+        let mut framed = Vec::with_capacity(request.len() + 2);
+        framed.extend_from_slice(&(request.len() as u16).to_be_bytes());
+        framed.extend_from_slice(request);
+        stream
+            .write_all(&framed)
+            .await
+            .map_err(|e| anyhow!("write tcp query failed: {}", e))?;
+        stream
+            .flush()
+            .await
+            .map_err(|e| anyhow!("flush tcp query failed: {}", e))?;
+        let mut len_buf = [0u8; 2];
+        stream
+            .read_exact(&mut len_buf)
+            .await
+            .map_err(|e| anyhow!("read tcp response length failed: {}", e))?;
+        let len = u16::from_be_bytes(len_buf) as usize;
+        let mut resp = vec![0u8; len];
+        stream
+            .read_exact(&mut resp)
+            .await
+            .map_err(|e| anyhow!("read tcp response failed: {}", e))?;
+        Message::from_vec(&resp).map_err(|e| anyhow!("parse tcp dns response failed: {}", e))
+    }
+
+    #[cfg(feature = "dns-quic")]
+    async fn query_quic(
+        &self,
+        quic: &QuicResolver,
+        request: &[u8],
+        host: &str,
+    ) -> Result<CacheEntry> {
+        let addr = Self::resolve_host_port(&quic.host, quic.port).await?;
+
+        let mut roots = rustls::RootCertStore::empty();
+        #[cfg(feature = "webpki-roots")]
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+
+        #[cfg(feature = "rustls-tls-aws-lc")]
+        let provider = rustls::crypto::aws_lc_rs::default_provider();
+        #[cfg(not(feature = "rustls-tls-aws-lc"))]
+        let provider = rustls::crypto::ring::default_provider();
+
+        let mut crypto = rustls::ClientConfig::builder_with_provider(Arc::new(provider))
+            .with_safe_default_protocol_versions()
+            .map_err(|e| anyhow!("create quic tls config failed: {}", e))?
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        crypto.alpn_protocols.push(b"doq".to_vec());
+
+        let client_config = quinn::ClientConfig::new(Arc::new(
+            quinn::crypto::rustls::QuicClientConfig::try_from(crypto)
+                .map_err(|e| anyhow!("create quic client config failed: {}", e))?,
+        ));
+
+        let bind = match addr {
+            SocketAddr::V4(_) => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
+            SocketAddr::V6(_) => SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
+        };
+        let socket = self.new_udp_socket(&bind).await?;
+        let mut endpoint = quinn::Endpoint::new(
+            quinn::EndpointConfig::default(),
+            None,
+            socket.into_std()?,
+            Arc::new(quinn::TokioRuntime),
+        )
+        .map_err(|e| anyhow!("create quic endpoint failed: {}", e))?;
+        endpoint.set_default_client_config(client_config);
+
+        let connecting = endpoint
+            .connect(addr, &quic.host)
+            .map_err(|e| anyhow!("connect quic server failed: {}", e))?;
+        let conn = connecting
+            .await
+            .map_err(|e| anyhow!("quic handshake failed: {}", e))?;
+
+        let (mut send, mut recv) = conn
+            .open_bi()
+            .await
+            .map_err(|e| anyhow!("open quic stream failed: {}", e))?;
+
+        let mut framed = Vec::with_capacity(request.len() + 2);
+        framed.extend_from_slice(&(request.len() as u16).to_be_bytes());
+        framed.extend_from_slice(request);
+        send.write_all(&framed)
+            .await
+            .map_err(|e| anyhow!("write quic query failed: {}", e))?;
+        let _ = send.finish();
+
+        let mut len_buf = [0u8; 2];
+        recv.read_exact(&mut len_buf)
+            .await
+            .map_err(|e| anyhow!("read quic response length failed: {}", e))?;
+        let len = u16::from_be_bytes(len_buf) as usize;
+        let mut resp = vec![0u8; len];
+        recv.read_exact(&mut resp)
+            .await
+            .map_err(|e| anyhow!("read quic response failed: {}", e))?;
+
+        let message = Message::from_vec(&resp)
+            .map_err(|e| anyhow!("parse quic dns response failed: {}", e))?;
+        let display = format!("quic+local://{}:{}", quic.host, quic.port);
+        Self::message_to_entry(&message, host, &display)
+    }
+
+    #[cfg(not(feature = "dns-quic"))]
+    async fn query_quic(
+        &self,
+        quic: &QuicResolver,
+        _request: &[u8],
+        _host: &str,
+    ) -> Result<CacheEntry> {
+        Err(anyhow!(
+            "dns server [quic+local://{}:{}] requires the \"dns-quic\" feature",
+            quic.host,
+            quic.port
+        ))
+    }
+
+    async fn query_system(&self, host: &str, ty: RecordType) -> Result<CacheEntry> {
+        debug!("resolving {} using system resolver", host);
+        let addr = format!("{}:0", host);
+        let start = std::time::Instant::now();
+        let ips = tokio::task::spawn_blocking(move || {
+            addr.to_socket_addrs()
+                .map(|iter| iter.map(|x| x.ip()).collect::<Vec<_>>())
+        })
+        .await
+        .map_err(|e| anyhow!("spawn blocking failed: {}", e))?
+        .map_err(|e| anyhow!("system resolver failed: {}", e))?;
+        let ips: Vec<IpAddr> = ips
+            .into_iter()
+            .filter(|ip| match ty {
+                RecordType::A => ip.is_ipv4(),
+                RecordType::AAAA => ip.is_ipv6(),
+                _ => true,
+            })
+            .collect();
+        debug!(
+            "resolved ips={:?} for domain={} from system resolver in {} ms",
+            &ips,
+            host,
+            start.elapsed().as_millis(),
+        );
+        if ips.is_empty() {
+            return Err(anyhow!("no records from system resolver"));
+        }
+        Ok(CacheEntry {
+            ips,
+            deadline: Instant::now() + Duration::from_secs(60),
         })
     }
 
-    pub fn replace_dispatcher(&mut self, dispatcher: Weak<Dispatcher>) {
-        self.dispatcher.replace(dispatcher);
+    async fn query_fakedns(&self, host: &str, ty: RecordType) -> Result<CacheEntry> {
+        match ty {
+            RecordType::A => (),
+            _ => return Err(anyhow!("fakedns only answers A queries")),
+        }
+        let fakedns = self
+            .fakedns
+            .as_ref()
+            .ok_or_else(|| anyhow!("fakedns server is configured but no fake-DNS engine is available"))?;
+        let ip = fakedns
+            .lookup_or_allocate(host)
+            .await
+            .map_err(|e| anyhow!("fakedns lookup failed for {}: {}", host, e))?;
+        Ok(CacheEntry {
+            ips: vec![ip],
+            deadline: Instant::now() + Duration::from_secs(1),
+        })
     }
 
-    pub fn reload(&mut self, dns: &protobuf::MessageField<crate::config::Dns>) -> Result<()> {
-        let dns = if let Some(dns) = dns.as_ref() {
-            dns
-        } else {
-            return Err(anyhow!("empty dns config"));
-        };
-        let servers = Self::load_servers(dns)?;
-        let hosts = Self::load_hosts(dns);
-        self.servers = servers;
-        self.hosts = hosts;
-        if let Ok(mut selector) = self.selector_state.lock() {
-            selector.primary_server = None;
-            selector.last_reselect_at = None;
-            selector.stats.clear();
-        }
-        Ok(())
-    }
-
-    async fn optimize_cache_ipv4(&self, address: String, connected_ip: IpAddr) {
-        // Nothing to do if the target address is an IP address.
-        if address.parse::<IpAddr>().is_ok() {
-            return;
-        }
-
-        // If the connected IP is not in the first place, we should optimize it.
-        let mut new_entry = if let Some(entry) = self.ipv4_cache.lock().await.get(&address) {
-            if !entry.ips.starts_with(&[connected_ip]) && entry.ips.contains(&connected_ip) {
-                entry.clone()
-            } else {
-                return;
+    async fn resolve_with_server(
+        &self,
+        client: &NsClient,
+        request: Vec<u8>,
+        host: &str,
+        ty: RecordType,
+    ) -> Result<CacheEntry> {
+        match &client.resolver {
+            Resolver::Server(addr, is_direct) => {
+                self.query_udp(*addr, *is_direct, request, host, &client.tag)
+                    .await
             }
-        } else {
-            return;
-        };
-
-        // Move failed IPs to the end, the optimized vector starts with the connected IP.
-        if let Ok(idx) = new_entry.ips.binary_search(&connected_ip) {
-            trace!("updates DNS cache item from\n{:#?}", &new_entry);
-            new_entry.ips.rotate_left(idx);
-            trace!("to\n{:#?}", &new_entry);
-            self.ipv4_cache.lock().await.put(address, new_entry);
-            trace!("updated cache");
-        }
-    }
-
-    async fn optimize_cache_ipv6(&self, address: String, connected_ip: IpAddr) {
-        // Nothing to do if the target address is an IP address.
-        if address.parse::<IpAddr>().is_ok() {
-            return;
-        }
-
-        // If the connected IP is not in the first place, we should optimize it.
-        let mut new_entry = if let Some(entry) = self.ipv6_cache.lock().await.get(&address) {
-            if !entry.ips.starts_with(&[connected_ip]) && entry.ips.contains(&connected_ip) {
-                entry.clone()
-            } else {
-                return;
+            Resolver::Tcp(addr, is_direct) => {
+                self.query_tcp(*addr, *is_direct, request, host, &client.tag)
+                    .await
             }
-        } else {
-            return;
-        };
-
-        // Move failed IPs to the end, the optimized vector starts with the connected IP.
-        if let Ok(idx) = new_entry.ips.binary_search(&connected_ip) {
-            trace!("updates DNS cache item from\n{:#?}", &new_entry);
-            new_entry.ips.rotate_left(idx);
-            trace!("to\n{:#?}", &new_entry);
-            self.ipv6_cache.lock().await.put(address, new_entry);
-            trace!("updated cache");
-        }
-    }
-
-    /// Updates the cache according to the IP address successfully connected.
-    pub async fn optimize_cache(&self, address: String, connected_ip: IpAddr) {
-        match connected_ip {
-            IpAddr::V4(..) => self.optimize_cache_ipv4(address, connected_ip).await,
-            IpAddr::V6(..) => self.optimize_cache_ipv6(address, connected_ip).await,
+            Resolver::DoH(doh) => {
+                self.query_with_doh(request, host, &client.resolver, doh, &client.tag)
+                    .await
+            }
+            Resolver::Quic(quic) => self.query_quic(quic, &request, host).await,
+            Resolver::System(_) => self.query_system(host, ty).await,
+            Resolver::FakeDns => self.query_fakedns(host, ty).await,
         }
     }
 
@@ -611,19 +1513,16 @@ impl DnsClient {
         request: Vec<u8>,
         span: tracing::Span,
         host: &str,
-        resolver: &Resolver,
+        addr: SocketAddr,
     ) -> Result<CacheEntry> {
-        let resolver_addr = match resolver {
-            Resolver::Server(addr, _) => SocksAddr::from(*addr),
-            _ => SocksAddr::any_ipv4(),
-        };
+        let resolver_addr = SocksAddr::from(addr);
         async move {
             let (mut r, mut s) = socket.split();
             for i in 0..*option::MAX_DNS_RETRIES {
                 debug!(
                     "looking up host={} server={} ({}/{})",
                     host,
-                    resolver,
+                    addr,
                     i + 1,
                     *option::MAX_DNS_RETRIES
                 );
@@ -643,11 +1542,11 @@ impl DnsClient {
                 {
                     Ok(Ok((n, _))) => n,
                     Ok(Err(e)) => {
-                        debug!("recv DNS response from {} failed: {}", resolver, e);
+                        debug!("recv DNS response from {} failed: {}", addr, e);
                         continue;
                     }
                     Err(e) => {
-                        debug!("recv DNS response from {} failed: {}", resolver, e);
+                        debug!("recv DNS response from {} failed: {}", addr, e);
                         continue;
                     }
                 };
@@ -655,64 +1554,110 @@ impl DnsClient {
                 let resp = match Message::from_vec(&buf[..n]) {
                     Ok(resp) => resp,
                     Err(err) => {
-                        debug!("parse DNS message from {} failed: {}", resolver, err);
+                        debug!("parse DNS message from {} failed: {}", addr, err);
                         break;
                     }
                 };
 
-                if resp.response_code() != ResponseCode::NoError {
-                    debug!(
-                        "error DNS response from {} for {}: {}",
-                        resolver,
-                        host,
-                        resp.response_code()
-                    );
-                    break;
-                }
-
-                let mut ips = Vec::new();
-                for ans in resp.answers() {
-                    if let Some(data) = ans.data() {
-                        match data {
-                            RData::A(ip) => {
-                                ips.push(IpAddr::V4(**ip));
-                            }
-                            RData::AAAA(ip) => {
-                                ips.push(IpAddr::V6(**ip));
-                            }
-                            _ => (),
-                        }
+                match Self::message_to_entry(&resp, host, &addr) {
+                    Ok(entry) => {
+                        let elapsed = tokio::time::Instant::now().duration_since(start);
+                        debug!(
+                            "received from server={} elapsed={}ms ips={:?}",
+                            addr,
+                            elapsed.as_millis(),
+                            &entry.ips
+                        );
+                        return Ok(entry);
+                    }
+                    Err(err) => {
+                        debug!("bad DNS response from {}: {}", addr, err);
+                        break;
                     }
                 }
-
-                if ips.is_empty() {
-                    debug!("no records in DNS response from {} for {}", resolver, host);
-                    break;
-                }
-
-                let elapsed = tokio::time::Instant::now().duration_since(start);
-                let ttl = resp.answers().iter().next().unwrap().ttl();
-                debug!(
-                    "received from server={} ttl={} elapsed={}ms ips={:?}",
-                    resolver,
-                    ttl,
-                    elapsed.as_millis(),
-                    &ips,
-                );
-
-                let Some(deadline) = Instant::now().checked_add(Duration::from_secs(ttl.into()))
-                else {
-                    debug!("invalid ttl");
-                    break;
-                };
-
-                let entry = CacheEntry { ips, deadline };
-                return Ok(entry);
             }
             Err(anyhow!("all lookup attempts failed"))
         }
         .instrument(span)
         .await
+    }
+
+    /// Extracts IPs/TTL from a DNS response, mirroring Xray's `parseResponse`.
+    fn message_to_entry(
+        message: &Message,
+        host: &str,
+        server: &dyn fmt::Display,
+    ) -> Result<CacheEntry> {
+        if message.response_code() != ResponseCode::NoError {
+            return Err(anyhow!(
+                "error DNS response from {} for {}: {}",
+                server,
+                host,
+                message.response_code()
+            ));
+        }
+        let mut ips = Vec::new();
+        let mut ttl = u32::MAX;
+        for ans in message.answers() {
+            if let Some(data) = ans.data() {
+                match data {
+                    RData::A(ip) => {
+                        ips.push(IpAddr::V4(**ip));
+                        ttl = ttl.min(ans.ttl());
+                    }
+                    RData::AAAA(ip) => {
+                        ips.push(IpAddr::V6(**ip));
+                        ttl = ttl.min(ans.ttl());
+                    }
+                    _ => (),
+                }
+            }
+        }
+        if ips.is_empty() {
+            return Err(anyhow!(
+                "no records in DNS response from {} for {}",
+                server,
+                host
+            ));
+        }
+        if ttl == u32::MAX {
+            ttl = 1;
+        }
+        let Some(deadline) = Instant::now().checked_add(Duration::from_secs(ttl.into())) else {
+            return Err(anyhow!("invalid ttl"));
+        };
+        Ok(CacheEntry { ips, deadline })
+    }
+
+    fn build_edns_ecs(client_ip: IpAddr) -> Edns {
+        let (family, netmask, mask): (u16, u8, Vec<u8>) = match client_ip {
+            IpAddr::V4(ip) => (1, 24, ip.octets()[..3].to_vec()),
+            IpAddr::V6(ip) => (2, 96, ip.octets()[..12].to_vec()),
+        };
+        let mut data = Vec::with_capacity(4 + mask.len());
+        data.extend_from_slice(&family.to_be_bytes());
+        data.push(netmask);
+        data.push(0);
+        data.extend_from_slice(&mask);
+        let mut edns = Edns::new();
+        edns.set_max_payload(1350).set_version(0);
+        edns.options_mut().insert(EdnsOption::Unknown(8, data));
+        edns
+    }
+
+    fn new_query(name: Name, ty: RecordType, client_ip: Option<IpAddr>) -> Message {
+        let mut msg = Message::new();
+        msg.add_query(Query::query(name, ty));
+        let mut rng = StdRng::from_entropy();
+        let id: u16 = rng.gen();
+        msg.set_id(id);
+        msg.set_op_code(OpCode::Query);
+        msg.set_message_type(MessageType::Query);
+        msg.set_recursion_desired(true);
+        if let Some(client_ip) = client_ip {
+            msg.set_edns(Self::build_edns_ecs(client_ip));
+        }
+        msg
     }
 
     fn extract_ech_config_list(rdata: &str) -> Option<String> {
@@ -750,19 +1695,141 @@ impl DnsClient {
             .or_else(|| extract_plain(rdata, "ech="))
     }
 
+    async fn query_ech_with_doh(
+        &self,
+        request: Vec<u8>,
+        host: &str,
+        resolver: &Resolver,
+        doh: &DohResolver,
+        ty: RecordType,
+    ) -> Result<EchCacheEntry> {
+        if doh.is_h2c {
+            return Err(anyhow!("h2c does not support ECH queries"));
+        }
+        #[cfg(feature = "dns-tls")]
+        {
+            for _ in 0..*option::MAX_DNS_RETRIES {
+                let bootstrap_addr = match self
+                    .resolve_doh_bootstrap_addr(&doh.domain, doh.bootstrap_ip, doh.port)
+                    .await
+                {
+                    Ok(addr) => addr,
+                    Err(err) => {
+                        debug!("resolve doh bootstrap failed: {}", err);
+                        continue;
+                    }
+                };
+                let stream = match self.connect_doh_tcp_stream(doh, bootstrap_addr, "dnsclient").await
+                {
+                    Ok(stream) => stream,
+                    Err(err) => {
+                        debug!("connect doh stream failed: {}", err);
+                        continue;
+                    }
+                };
+                let mut stream = match Self::wrap_doh_tls_stream(stream, &doh.domain).await {
+                    Ok(stream) => stream,
+                    Err(err) => {
+                        debug!("connect doh tls failed: {}", err);
+                        continue;
+                    }
+                };
+                let request_header =
+                    Self::build_doh_http_request(&doh.domain, &doh.path, request.len());
+                if stream.write_all(request_header.as_bytes()).await.is_err() {
+                    continue;
+                }
+                if stream.write_all(&request).await.is_err() {
+                    continue;
+                }
+                if stream.flush().await.is_err() {
+                    continue;
+                }
+                let mut resp = Vec::new();
+                if stream.read_to_end(&mut resp).await.is_err() {
+                    continue;
+                }
+                let payload = match Self::parse_doh_http_body(&resp) {
+                    Ok(body) => body,
+                    Err(err) => {
+                        debug!("parse doh http response failed: {}", err);
+                        continue;
+                    }
+                };
+                let message = match Message::from_vec(&payload) {
+                    Ok(message) => message,
+                    Err(err) => {
+                        debug!("parse doh dns payload failed: {}", err);
+                        continue;
+                    }
+                };
+                return Self::ech_entry_from_message(&message, host, resolver, ty);
+            }
+            Err(anyhow!("all doh ech lookup attempts failed"))
+        }
+        #[cfg(not(feature = "dns-tls"))]
+        {
+            let _ = (request, host, resolver, ty);
+            Err(anyhow!("https dns server requires the \"dns-tls\" feature"))
+        }
+    }
+
+    fn ech_entry_from_message(
+        message: &Message,
+        host: &str,
+        server: &dyn fmt::Display,
+        ty: RecordType,
+    ) -> Result<EchCacheEntry> {
+        if message.response_code() != ResponseCode::NoError {
+            return Err(anyhow!(
+                "error DNS response from {} for {}: {}",
+                server,
+                host,
+                message.response_code()
+            ));
+        }
+        let mut last_ttl = None;
+        for ans in message.answers() {
+            if ans.record_type() != ty {
+                continue;
+            }
+            if let Some(data) = ans.data() {
+                last_ttl = Some(ans.ttl());
+                let value = data.to_string();
+                if let Some(ech_config_list) = Self::extract_ech_config_list(&value) {
+                    let ttl = ans.ttl();
+                    let Some(deadline) = Instant::now().checked_add(Duration::from_secs(ttl.into()))
+                    else {
+                        return Err(anyhow!("invalid ttl"));
+                    };
+                    return Ok(EchCacheEntry {
+                        ech_config_list,
+                        deadline,
+                    });
+                }
+            }
+        }
+        if last_ttl.is_some() {
+            return Err(anyhow!(
+                "missing ech parameter in {} record for {} from {}",
+                ty,
+                host,
+                server
+            ));
+        }
+        Err(anyhow!("no {} records for {} from {}", ty, host, server))
+    }
+
     async fn query_ech_with_socket(
         &self,
         socket: Box<dyn OutboundDatagram>,
         request: Vec<u8>,
         span: tracing::Span,
         host: &str,
-        resolver: &Resolver,
+        addr: SocketAddr,
         ty: RecordType,
     ) -> Result<EchCacheEntry> {
-        let resolver_addr = match resolver {
-            Resolver::Server(addr, _) => SocksAddr::from(*addr),
-            _ => SocksAddr::any_ipv4(),
-        };
+        let resolver_addr = SocksAddr::from(addr);
         async move {
             let (mut r, mut s) = socket.split();
             for i in 0..*option::MAX_DNS_RETRIES {
@@ -770,17 +1837,14 @@ impl DnsClient {
                     "fetching ech host={} type={} server={} ({}/{})",
                     host,
                     ty,
-                    resolver,
+                    addr,
                     i + 1,
                     *option::MAX_DNS_RETRIES
                 );
-                let start = tokio::time::Instant::now();
-
                 if let Err(err) = s.send_to(&request, &resolver_addr).await {
                     debug!("send DNS ech query failed: {}", err);
                     continue;
                 }
-
                 let mut buf = vec![0u8; 2048];
                 let n = match timeout(
                     Duration::from_secs(*option::DNS_TIMEOUT),
@@ -790,80 +1854,28 @@ impl DnsClient {
                 {
                     Ok(Ok((n, _))) => n,
                     Ok(Err(e)) => {
-                        debug!("recv DNS ech response from {} failed: {}", resolver, e);
+                        debug!("recv DNS ech response from {} failed: {}", addr, e);
                         continue;
                     }
                     Err(e) => {
-                        debug!("recv DNS ech response from {} failed: {}", resolver, e);
+                        debug!("recv DNS ech response from {} failed: {}", addr, e);
                         continue;
                     }
                 };
-
                 let resp = match Message::from_vec(&buf[..n]) {
                     Ok(resp) => resp,
                     Err(err) => {
-                        debug!("parse DNS ech message from {} failed: {}", resolver, err);
+                        debug!("parse DNS ech message from {} failed: {}", addr, err);
                         break;
                     }
                 };
-
-                if resp.response_code() != ResponseCode::NoError {
-                    debug!(
-                        "error DNS ech response from {} for {}: {}",
-                        resolver,
-                        host,
-                        resp.response_code()
-                    );
-                    break;
-                }
-
-                let mut last_ttl = None;
-                for ans in resp.answers() {
-                    if ans.record_type() != ty {
-                        continue;
-                    }
-                    if let Some(data) = ans.data() {
-                        last_ttl = Some(ans.ttl());
-                        let value = data.to_string();
-                        if let Some(ech_config_list) = Self::extract_ech_config_list(&value) {
-                            let ttl = ans.ttl();
-                            let elapsed = tokio::time::Instant::now().duration_since(start);
-                            debug!(
-                                "received ech from server={} type={} ttl={} elapsed={}ms len={}",
-                                resolver,
-                                ty,
-                                ttl,
-                                elapsed.as_millis(),
-                                ech_config_list.len()
-                            );
-                            let Some(deadline) =
-                                Instant::now().checked_add(Duration::from_secs(ttl.into()))
-                            else {
-                                break;
-                            };
-                            return Ok(EchCacheEntry {
-                                ech_config_list,
-                                deadline,
-                            });
-                        }
+                match Self::ech_entry_from_message(&resp, host, &addr, ty) {
+                    Ok(entry) => return Ok(entry),
+                    Err(e) => {
+                        debug!("bad DNS ech response from {}: {}", addr, e);
+                        break;
                     }
                 }
-
-                if last_ttl.is_some() {
-                    trace!(
-                        "ech parameter missing in record host={} type={} server={}",
-                        host,
-                        ty,
-                        resolver
-                    );
-                    return Err(anyhow!(
-                        "missing ech parameter in {} record for {} from {}",
-                        ty,
-                        host,
-                        resolver
-                    ));
-                }
-                return Err(anyhow!("no {} records for {} from {}", ty, host, resolver));
             }
             Err(anyhow!("all ech lookup attempts failed"))
         }
@@ -871,413 +1883,28 @@ impl DnsClient {
         .await
     }
 
-    async fn resolve_with_server(
-        &self,
-        is_direct: bool,
-        request: Vec<u8>,
-        host: &str,
-        resolver: &Resolver,
-    ) -> Result<CacheEntry> {
-        let (socket, span) = match resolver {
-            Resolver::Server(server, _) if is_direct => {
-                debug!("direct lookup");
-                let socket = self.new_udp_socket(server).await?;
-                (
-                    Box::new(StdOutboundDatagram::new(socket)) as Box<dyn OutboundDatagram>,
-                    tracing::Span::current(),
-                )
-            }
-            Resolver::Server(server, _) => {
-                debug!("dispatched lookup");
-                if let Some(dispatcher_weak) = self.dispatcher.as_ref() {
-                    // The source address will be used to determine which address the
-                    // underlying socket will bind.
-                    let source = match server {
-                        SocketAddr::V4(_) => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
-                        SocketAddr::V6(_) => SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
-                    };
-                    let sess = Session {
-                        network: Network::Udp,
-                        source,
-                        destination: SocksAddr::from(server),
-                        inbound_tag: "dnsclient".to_string(),
-                        ..Default::default()
-                    };
-                    let span = sess.span();
-                    if let Some(dispatcher) = dispatcher_weak.upgrade() {
-                        (
-                            dispatcher
-                                .dispatch_datagram(sess)
-                                .instrument(span.clone())
-                                .await?,
-                            span,
-                        )
-                    } else {
-                        return Err(anyhow!("dispatcher is gone"));
-                    }
-                } else {
-                    return Err(anyhow!("no dispatcher"));
-                }
-            }
-            Resolver::System(_) => {
-                debug!("resolving {} using system resolver", host);
-                use std::net::ToSocketAddrs;
-                let addr = format!("{}:0", host);
-                let start = std::time::Instant::now();
-                let ips = tokio::task::spawn_blocking(move || {
-                    addr.to_socket_addrs()
-                        .map(|iter| iter.map(|x| x.ip()).collect::<Vec<_>>())
-                })
-                .await
-                .map_err(|e| anyhow!("spawn blocking failed: {}", e))?
-                .map_err(|e| anyhow!("system resolver failed: {}", e))?;
-
-                debug!(
-                    "resolved ips={:?} for domain={} from system resolver in {} ms",
-                    &ips,
-                    host,
-                    start.elapsed().as_millis(),
-                );
-
-                if ips.is_empty() {
-                    return Err(anyhow!("no records from system resolver"));
-                }
-
-                return Ok(CacheEntry {
-                    ips,
-                    deadline: Instant::now() + Duration::from_secs(60),
-                });
-            }
-            Resolver::DoH(doh) => {
-                return self.query_with_doh(request, host, resolver, doh).await;
-            }
-        };
-
-        self.query_with_socket(socket, request, span, host, resolver)
-            .await
-    }
-
     async fn resolve_ech_with_server(
         &self,
-        is_direct: bool,
+        client: &NsClient,
         request: Vec<u8>,
         host: &str,
-        resolver: &Resolver,
         ty: RecordType,
     ) -> Result<EchCacheEntry> {
-        let (socket, span) = match resolver {
-            Resolver::Server(server, _) if is_direct => {
-                let socket = self.new_udp_socket(server).await?;
-                (
-                    Box::new(StdOutboundDatagram::new(socket)) as Box<dyn OutboundDatagram>,
-                    tracing::Span::current(),
-                )
-            }
-            Resolver::Server(server, _) => {
-                if let Some(dispatcher_weak) = self.dispatcher.as_ref() {
-                    let source = match server {
-                        SocketAddr::V4(_) => SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0),
-                        SocketAddr::V6(_) => SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 0),
-                    };
-                    let sess = Session {
-                        network: Network::Udp,
-                        source,
-                        destination: SocksAddr::from(server),
-                        inbound_tag: "dnsclient".to_string(),
-                        ..Default::default()
-                    };
-                    let span = sess.span();
-                    if let Some(dispatcher) = dispatcher_weak.upgrade() {
-                        (
-                            dispatcher
-                                .dispatch_datagram(sess)
-                                .instrument(span.clone())
-                                .await?,
-                            span,
-                        )
-                    } else {
-                        return Err(anyhow!("dispatcher is gone"));
-                    }
-                } else {
-                    return Err(anyhow!("no dispatcher"));
-                }
-            }
-            Resolver::System(_) => {
-                return Err(anyhow!("system resolver does not support {} query", ty));
+        match &client.resolver {
+            Resolver::Server(addr, is_direct) => {
+                let (socket, span) = self.open_udp_socket(*addr, *is_direct, &client.tag).await?;
+                self.query_ech_with_socket(socket, request, span, host, *addr, ty)
+                    .await
             }
             Resolver::DoH(doh) => {
-                return self
-                    .query_ech_with_doh(request, host, resolver, doh, ty)
-                    .await;
-            }
-        };
-
-        self.query_ech_with_socket(socket, request, span, host, resolver, ty)
-            .await
-    }
-
-    fn select_preferred_server_index(&self, servers: &[&Resolver]) -> usize {
-        if let Ok(mut selector) = self.selector_state.lock() {
-            selector.select_primary_index(servers)
-        } else {
-            0
-        }
-    }
-
-    fn fallback_server_indices(&self, servers: &[&Resolver], preferred_idx: usize) -> Vec<usize> {
-        if let Ok(selector) = self.selector_state.lock() {
-            selector.fallback_indices(servers, preferred_idx)
-        } else {
-            (0..servers.len())
-                .filter(|idx| *idx != preferred_idx)
-                .collect()
-        }
-    }
-
-    fn mark_server_success(&self, resolver: &Resolver, elapsed: Duration) {
-        if let Ok(mut selector) = self.selector_state.lock() {
-            selector.mark_success(&resolver.to_string(), elapsed);
-        }
-    }
-
-    fn mark_server_failure(&self, resolver: &Resolver, is_timeout: bool) {
-        if let Ok(mut selector) = self.selector_state.lock() {
-            selector.mark_failure(&resolver.to_string(), is_timeout);
-        }
-    }
-
-    fn switch_primary_server(&self, resolver: &Resolver) {
-        if let Ok(mut selector) = self.selector_state.lock() {
-            selector.set_primary(&resolver.to_string());
-        }
-    }
-
-    async fn query_task(
-        &self,
-        is_direct: bool,
-        request: Vec<u8>,
-        host: &str,
-        resolver: &Resolver,
-        ty: RecordType,
-    ) -> Result<(CacheEntry, Duration)> {
-        let start = tokio::time::Instant::now();
-        let res = match timeout(
-            Duration::from_secs(*option::DNS_TIMEOUT),
-            self.resolve_with_server(is_direct, request, host, resolver),
-        )
-        .await
-        {
-            Ok(res) => res,
-            Err(_) => Err(anyhow!("query {} {} timeout", host, ty)),
-        };
-        match res {
-            Ok(entry) => {
-                trace!("query {} {} success with server {}", host, ty, resolver);
-                let elapsed = start.elapsed();
-                self.mark_server_success(resolver, elapsed);
-                Ok((entry, elapsed))
-            }
-            Err(e) => {
-                let is_timeout = e.to_string().contains("timeout");
-                self.mark_server_failure(resolver, is_timeout);
-                debug!(
-                    "query {} {} failed with server {}: {}",
-                    host, ty, resolver, e
-                );
-                Err(e)
-            }
-        }
-    }
-
-    async fn query_ech_task(
-        &self,
-        is_direct: bool,
-        request: Vec<u8>,
-        host: &str,
-        resolver: &Resolver,
-        ty: RecordType,
-    ) -> Result<(EchCacheEntry, Duration)> {
-        let start = tokio::time::Instant::now();
-        let res = match timeout(
-            Duration::from_secs(*option::DNS_TIMEOUT),
-            self.resolve_ech_with_server(is_direct, request, host, resolver, ty),
-        )
-        .await
-        {
-            Ok(res) => res,
-            Err(_) => Err(anyhow!("query {} {} timeout", host, ty)),
-        };
-        match res {
-            Ok(entry) => {
-                let elapsed = start.elapsed();
-                self.mark_server_success(resolver, elapsed);
-                Ok((entry, elapsed))
-            }
-            Err(e) => {
-                let is_timeout = e.to_string().contains("timeout");
-                self.mark_server_failure(resolver, is_timeout);
-                debug!(
-                    "query ech {} {} failed with server {}: {}",
-                    host, ty, resolver, e
-                );
-                Err(e)
-            }
-        }
-    }
-
-    async fn is_direct_outbound(&self, host: &str) -> Result<bool> {
-        let mut is_direct_outbound = false;
-        if let Some(dispatcher_weak) = self.dispatcher.as_ref() {
-            if let Some(dispatcher) = dispatcher_weak.upgrade() {
-                let dest = match SocksAddr::try_from((host.to_owned(), 0)) {
-                    Ok(d) => d,
-                    Err(e) => return Err(anyhow!("invalid host {}: {}", host, e)),
-                };
-                let sess = Session {
-                    destination: dest,
-                    skip_resolve: true,
-                    ..Default::default()
-                };
-                let router = dispatcher.router.read().await.clone();
-                if let Some(tag) = router.pick_route(&sess).await.ok().flatten().cloned() {
-                    is_direct_outbound = dispatcher.is_direct_outbound(&tag).await;
-                }
-            }
-        }
-        Ok(is_direct_outbound)
-    }
-
-    fn collect_servers(&self, is_direct_outbound: bool) -> Vec<&Resolver> {
-        let mut servers = Vec::new();
-        if is_direct_outbound {
-            for server in &self.servers {
-                match server {
-                    Resolver::Server(_, true) | Resolver::System(true) => {
-                        servers.push(server);
-                    }
-                    Resolver::DoH(doh) if doh.is_direct => {
-                        servers.push(server);
-                    }
-                    _ => (),
-                }
-            }
-            if servers.is_empty() {
-                debug!("no direct dns servers for direct outbound, fallback to normal servers");
-                for server in &self.servers {
-                    match server {
-                        Resolver::Server(_, false) | Resolver::System(false) => {
-                            servers.push(server);
-                        }
-                        Resolver::DoH(doh) if !doh.is_direct => {
-                            servers.push(server);
-                        }
-                        _ => (),
-                    }
-                }
-            }
-        } else {
-            for server in &self.servers {
-                match server {
-                    Resolver::Server(_, false) | Resolver::System(false) => {
-                        servers.push(server);
-                    }
-                    Resolver::DoH(doh) if !doh.is_direct => {
-                        servers.push(server);
-                    }
-                    _ => (),
-                }
-            }
-        }
-        if servers.is_empty() {
-            for server in &self.servers {
-                servers.push(server);
-            }
-        }
-        servers
-    }
-
-    #[async_recursion]
-    async fn query_record_type(
-        &self,
-        is_direct: bool,
-        name: &Name,
-        host: &str,
-        ty: RecordType,
-    ) -> Result<CacheEntry> {
-        let msg = Self::new_query(name.clone(), ty);
-        let msg_buf = match msg.to_vec() {
-            Ok(b) => b,
-            Err(e) => return Err(anyhow!("encode message to buffer failed: {}", e)),
-        };
-
-        let is_direct_outbound = self.is_direct_outbound(host).await?;
-        let servers = self.collect_servers(is_direct_outbound);
-        if servers.is_empty() {
-            return Err(anyhow!("no dns servers available for query"));
-        }
-        if servers.len() == 1 {
-            return self
-                .query_task(is_direct, msg_buf, host, servers[0], ty)
-                .await
-                .map(|(entry, _)| entry);
-        }
-        let preferred_idx = self.select_preferred_server_index(&servers);
-        let preferred = servers[preferred_idx];
-        let mut errors = Vec::new();
-
-        match self
-            .query_task(is_direct, msg_buf.clone(), host, preferred, ty)
-            .await
-        {
-            Ok((entry, _)) => return Ok(entry),
-            Err(err) => errors.push(format!("{}: {}", preferred, err)),
-        }
-
-        let fallback_indices = self.fallback_server_indices(&servers, preferred_idx);
-        let fallback_concurrency = (*option::DNS_SERVER_FALLBACK_CONCURRENCY).max(1);
-        let mut cursor = 0usize;
-        while cursor < fallback_indices.len() {
-            let batch_end = std::cmp::min(
-                cursor.saturating_add(fallback_concurrency),
-                fallback_indices.len(),
-            );
-            let batch = &fallback_indices[cursor..batch_end];
-            if batch.len() == 1 {
-                let idx = batch[0];
-                match self
-                    .query_task(is_direct, msg_buf.clone(), host, servers[idx], ty)
+                self.query_ech_with_doh(request, host, &client.resolver, doh, ty)
                     .await
-                {
-                    Ok((entry, _)) => {
-                        self.switch_primary_server(servers[idx]);
-                        return Ok(entry);
-                    }
-                    Err(err) => errors.push(format!("{}: {}", servers[idx], err)),
-                }
-            } else {
-                let mut tasks = Vec::new();
-                for idx in batch {
-                    let resolver = servers[*idx];
-                    let request = msg_buf.clone();
-                    let t = async move {
-                        self.query_task(is_direct, request, host, resolver, ty)
-                            .await
-                            .map(|(entry, _)| (*idx, entry))
-                    };
-                    tasks.push(Box::pin(t));
-                }
-                match select_ok(tasks.into_iter()).await {
-                    Ok(((idx, entry), _)) => {
-                        self.switch_primary_server(servers[idx]);
-                        return Ok(entry);
-                    }
-                    Err(err) => errors.push(format!("fallback batch failed: {}", err)),
-                }
             }
-            cursor = batch_end;
+            _ => Err(anyhow!(
+                "server {} does not support ECH queries",
+                client
+            )),
         }
-
-        Err(anyhow!("all dns queries failed: {}", errors.join("; ")))
     }
 
     async fn query_ech_record_type(
@@ -1287,172 +1914,30 @@ impl DnsClient {
         host: &str,
         ty: RecordType,
     ) -> Result<EchCacheEntry> {
-        let msg = Self::new_query(name.clone(), ty);
+        let msg = Self::new_query(name.clone(), ty, self.client_ip);
         let msg_buf = match msg.to_vec() {
-            Ok(b) => b,
+            Ok(buf) => buf,
             Err(e) => return Err(anyhow!("encode message to buffer failed: {}", e)),
         };
-        let is_direct_outbound = self.is_direct_outbound(host).await?;
-        let servers = self.collect_servers(is_direct_outbound);
-        if servers.is_empty() {
+        let candidates = self.collect_servers(is_direct);
+        if candidates.is_empty() {
             return Err(anyhow!("no dns servers available for query"));
         }
-        if servers.len() == 1 {
-            return self
-                .query_ech_task(is_direct, msg_buf, host, servers[0], ty)
-                .await
-                .map(|(entry, _)| entry);
-        }
-        let preferred_idx = self.select_preferred_server_index(&servers);
-        let preferred = servers[preferred_idx];
-        let mut errors = Vec::new();
-
-        match self
-            .query_ech_task(is_direct, msg_buf.clone(), host, preferred, ty)
+        let ordered = self.sort_clients(host, &candidates);
+        let mut errs = Vec::new();
+        for client in &ordered {
+            match timeout(
+                client.timeout,
+                self.resolve_ech_with_server(client, msg_buf.clone(), host, ty),
+            )
             .await
-        {
-            Ok((entry, _)) => return Ok(entry),
-            Err(err) => errors.push(format!("{}: {}", preferred, err)),
-        }
-
-        let fallback_indices = self.fallback_server_indices(&servers, preferred_idx);
-        let fallback_concurrency = (*option::DNS_SERVER_FALLBACK_CONCURRENCY).max(1);
-        let mut cursor = 0usize;
-        while cursor < fallback_indices.len() {
-            let batch_end = std::cmp::min(
-                cursor.saturating_add(fallback_concurrency),
-                fallback_indices.len(),
-            );
-            let batch = &fallback_indices[cursor..batch_end];
-            if batch.len() == 1 {
-                let idx = batch[0];
-                match self
-                    .query_ech_task(is_direct, msg_buf.clone(), host, servers[idx], ty)
-                    .await
-                {
-                    Ok((entry, _)) => {
-                        self.switch_primary_server(servers[idx]);
-                        return Ok(entry);
-                    }
-                    Err(err) => errors.push(format!("{}: {}", servers[idx], err)),
-                }
-            } else {
-                let mut tasks = Vec::new();
-                for idx in batch {
-                    let resolver = servers[*idx];
-                    let request = msg_buf.clone();
-                    let t = async move {
-                        self.query_ech_task(is_direct, request, host, resolver, ty)
-                            .await
-                            .map(|(entry, _)| (*idx, entry))
-                    };
-                    tasks.push(Box::pin(t));
-                }
-                match select_ok(tasks.into_iter()).await {
-                    Ok(((idx, entry), _)) => {
-                        self.switch_primary_server(servers[idx]);
-                        return Ok(entry);
-                    }
-                    Err(err) => errors.push(format!("fallback batch failed: {}", err)),
-                }
-            }
-            cursor = batch_end;
-        }
-
-        Err(anyhow!("all ech queries failed: {}", errors.join("; ")))
-    }
-
-    async fn dualstack_query<P, F>(
-        &self,
-        preferred: &mut P,
-        fallback: &mut F,
-        delay: Duration,
-    ) -> Result<(CacheEntry, Option<CacheEntry>)>
-    where
-        P: std::future::Future<Output = Result<CacheEntry>> + Unpin,
-        F: std::future::Future<Output = Result<CacheEntry>> + Unpin,
-    {
-        let delay_fut = tokio::time::sleep(delay);
-        tokio::pin!(delay_fut);
-
-        let first = tokio::select! {
-            biased;
-            r = &mut *preferred => Some((true, r)),
-            _ = &mut delay_fut => None,
-        };
-
-        let (first_is_preferred, first_res) = match first {
-            Some(v) => v,
-            None => tokio::select! {
-                r = &mut *preferred => (true, r),
-                r = &mut *fallback => (false, r),
-            },
-        };
-
-        match first_res {
-            Ok(entry) => {
-                let other = if first_is_preferred {
-                    match timeout(Duration::from_millis(0), &mut *fallback).await {
-                        Ok(Ok(e)) => Some(e),
-                        _ => None,
-                    }
-                } else {
-                    match timeout(Duration::from_millis(0), &mut *preferred).await {
-                        Ok(Ok(e)) => Some(e),
-                        _ => None,
-                    }
-                };
-                Ok((entry, other))
-            }
-            Err(err1) => {
-                let second_res = if first_is_preferred {
-                    (&mut *fallback).await
-                } else {
-                    (&mut *preferred).await
-                };
-                match second_res {
-                    Ok(entry) => Ok((entry, None)),
-                    Err(err2) => Err(anyhow!("all dns queries failed: {}; {}", err1, err2)),
-                }
-            }
-        }
-    }
-
-    fn new_query(name: Name, ty: RecordType) -> Message {
-        let mut msg = Message::new();
-        msg.add_query(Query::query(name, ty));
-        let mut rng = StdRng::from_entropy();
-        let id: u16 = rng.gen();
-        msg.set_id(id);
-        msg.set_op_code(OpCode::Query);
-        msg.set_message_type(MessageType::Query);
-        msg.set_recursion_desired(true);
-        msg
-    }
-
-    async fn cache_insert(&self, host: &str, entry: CacheEntry) {
-        if entry.ips.is_empty() {
-            return;
-        }
-        match entry.ips[0] {
-            IpAddr::V4(..) => self.ipv4_cache.lock().await.put(host.to_owned(), entry),
-            IpAddr::V6(..) => self.ipv6_cache.lock().await.put(host.to_owned(), entry),
-        };
-    }
-
-    async fn get_cached_ech(&self, host: &str) -> Option<String> {
-        let mut cache = self.ech_cache.lock().await;
-        if let Some(entry) = cache.get(host) {
-            if entry
-                .deadline
-                .checked_duration_since(Instant::now())
-                .is_some()
             {
-                return Some(entry.ech_config_list.clone());
+                Ok(Ok(entry)) => return Ok(entry),
+                Ok(Err(e)) => errs.push(e),
+                Err(_) => errs.push(anyhow!("query {} {} timeout", host, ty)),
             }
         }
-        cache.pop(host);
-        None
+        Err(merge_query_errors(errs))
     }
 
     async fn query_ech(&self, host: &str, is_direct: bool) -> Result<EchCacheEntry> {
@@ -1515,37 +2000,211 @@ impl DnsClient {
         result
     }
 
-    async fn get_cached(&self, host: &String) -> Result<Vec<IpAddr>> {
-        let mut cached_ips = Vec::new();
+    // ------------------------------------------------------------- selection
 
-        let fetch_order = match (*crate::option::ENABLE_IPV6, *crate::option::PREFER_IPV6) {
-            (true, true) => vec![&self.ipv6_cache, &self.ipv4_cache],
-            (true, false) => vec![&self.ipv4_cache, &self.ipv6_cache],
-            _ => vec![&self.ipv4_cache],
-        };
-
-        // Query caches in priority order
-        for cache in fetch_order {
-            if let Some(entry) = cache.lock().await.get(host) {
-                if entry
-                    .deadline
-                    .checked_duration_since(Instant::now())
-                    .is_none()
-                {
-                    return Err(anyhow!("entry expired"));
-                }
-                let mut ips = entry.ips.to_vec();
-                cached_ips.append(&mut ips);
+    fn collect_servers(&self, is_direct: bool) -> Vec<&NsClient> {
+        let mut servers = Vec::new();
+        for server in &self.servers {
+            if server.is_direct() == is_direct {
+                servers.push(server);
             }
         }
+        if servers.is_empty() {
+            for server in &self.servers {
+                servers.push(server);
+            }
+        }
+        servers
+    }
 
-        // Return results or error if no cached IPs found
-        if !cached_ips.is_empty() {
-            Ok(cached_ips)
+    fn base_ip_option(&self) -> IpOption {
+        let mut option = self.query_strategy.ip_option();
+        if !*crate::option::ENABLE_IPV6 {
+            option.ipv6 = false;
+        }
+        option
+    }
+
+    fn filter_entry(&self, client: &NsClient, mut entry: CacheEntry) -> CacheEntry {
+        if let Some(expected) = &client.expected {
+            if !client.act_prior {
+                entry.ips = expected.filter(&entry.ips).0;
+                if entry.ips.is_empty() {
+                    return entry;
+                }
+            }
+        }
+        if let Some(unexpected) = &client.unexpected {
+            if !client.act_unprior {
+                entry.ips = unexpected.filter(&entry.ips).1;
+                if entry.ips.is_empty() {
+                    return entry;
+                }
+            }
+        }
+        if let Some(expected) = &client.expected {
+            if client.act_prior {
+                let matched = expected.filter(&entry.ips).0;
+                if !matched.is_empty() {
+                    entry.ips = matched;
+                }
+            }
+        }
+        if let Some(unexpected) = &client.unexpected {
+            if client.act_unprior {
+                let unmatched = unexpected.filter(&entry.ips).1;
+                if !unmatched.is_empty() {
+                    entry.ips = unmatched;
+                }
+            }
+        }
+        entry
+    }
+
+    async fn query_task(
+        &self,
+        client: &NsClient,
+        request: Vec<u8>,
+        host: &str,
+        ty: RecordType,
+    ) -> Result<CacheEntry> {
+        debug!(
+            "query {} {} via {} (tag={}, disable_cache={}, serve_stale={}, serve_expired_ttl={})",
+            host,
+            ty,
+            client.display_name(),
+            client.tag,
+            client.disable_cache,
+            client.serve_stale,
+            client.serve_expired_ttl,
+        );
+        let entry = match timeout(
+            client.timeout,
+            self.resolve_with_server(client, request, host, ty),
+        )
+        .await
+        {
+            Ok(res) => res?,
+            Err(_) => return Err(anyhow!("query {} {} timeout", host, ty)),
+        };
+        let entry = self.filter_entry(client, entry);
+        if entry.ips.is_empty() {
+            return Err(anyhow!(
+                "no addresses for {} from {} after ip filtering",
+                host,
+                client
+            ));
+        }
+        Ok(entry)
+    }
+
+    async fn query_record_type(
+        &self,
+        is_direct: bool,
+        name: &Name,
+        host: &str,
+        ty: RecordType,
+        base: IpOption,
+    ) -> Result<CacheEntry> {
+        let msg = Self::new_query(name.clone(), ty, self.client_ip);
+        let msg_buf = match msg.to_vec() {
+            Ok(buf) => buf,
+            Err(e) => return Err(anyhow!("encode message to buffer failed: {}", e)),
+        };
+
+        let candidates = self.collect_servers(is_direct);
+        if candidates.is_empty() {
+            return Err(anyhow!("no dns servers available for query"));
+        }
+
+        let mut usable = Vec::new();
+        for client in candidates {
+            if matches!(ty, RecordType::AAAA) && matches!(client.resolver, Resolver::FakeDns) {
+                continue;
+            }
+            let option = client.ip_option(base);
+            let enabled = match ty {
+                RecordType::A => option.ipv4,
+                RecordType::AAAA => option.ipv6,
+                _ => true,
+            };
+            if enabled {
+                usable.push(client);
+            }
+        }
+        if usable.is_empty() {
+            return Err(anyhow!("no dns servers support the {} query", ty));
+        }
+
+        let ordered = self.sort_clients(host, &usable);
+        if ordered.is_empty() {
+            return Err(anyhow!("no dns servers available for query"));
+        }
+
+        if self.enable_parallel_query {
+            self.parallel_query(&ordered, host, ty, &msg_buf).await
         } else {
-            Err(anyhow!("empty result"))
+            self.serial_query(&ordered, host, ty, &msg_buf).await
         }
     }
+
+    async fn dualstack_query<P, F>(
+        &self,
+        preferred: &mut P,
+        fallback: &mut F,
+        delay: Duration,
+    ) -> Result<(CacheEntry, Option<CacheEntry>)>
+    where
+        P: Future<Output = Result<CacheEntry>> + Unpin,
+        F: Future<Output = Result<CacheEntry>> + Unpin,
+    {
+        let delay_fut = tokio::time::sleep(delay);
+        tokio::pin!(delay_fut);
+
+        let first = tokio::select! {
+            biased;
+            r = &mut *preferred => Some((true, r)),
+            _ = &mut delay_fut => None,
+        };
+
+        let (first_is_preferred, first_res) = match first {
+            Some(v) => v,
+            None => tokio::select! {
+                r = &mut *preferred => (true, r),
+                r = &mut *fallback => (false, r),
+            },
+        };
+
+        match first_res {
+            Ok(entry) => {
+                let other = if first_is_preferred {
+                    match timeout(Duration::from_millis(0), &mut *fallback).await {
+                        Ok(Ok(e)) => Some(e),
+                        _ => None,
+                    }
+                } else {
+                    match timeout(Duration::from_millis(0), &mut *preferred).await {
+                        Ok(Ok(e)) => Some(e),
+                        _ => None,
+                    }
+                };
+                Ok((entry, other))
+            }
+            Err(err1) => {
+                let second_res = if first_is_preferred {
+                    (&mut *fallback).await
+                } else {
+                    (&mut *preferred).await
+                };
+                match second_res {
+                    Ok(entry) => Ok((entry, None)),
+                    Err(err2) => Err(anyhow!("all dns queries failed: {}; {}", err1, err2)),
+                }
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- lookup
 
     pub async fn lookup(&self, host: &String) -> Result<Vec<IpAddr>> {
         self._lookup(host, false).await
@@ -1565,8 +2224,10 @@ impl DnsClient {
             return Ok(vec![ip]);
         }
 
-        if let Ok(ips) = self.get_cached(host).await {
-            return Ok(ips);
+        if !self.disable_cache {
+            if let Ok(ips) = self.get_cached(host).await {
+                return Ok(ips);
+            }
         }
 
         // Making cache lookup a priority rather than static hosts lookup
@@ -1575,7 +2236,7 @@ impl DnsClient {
         if !self.hosts.is_empty() {
             if let Some(ips) = self.hosts.get(host) {
                 if !ips.is_empty() {
-                    if ips.len() > 1 {
+                    if ips.len() > 1 && !self.disable_cache {
                         let deadline = Instant::now()
                             .checked_add(Duration::from_secs(6000))
                             .unwrap();
@@ -1593,6 +2254,11 @@ impl DnsClient {
             }
         }
 
+        let base = self.base_ip_option();
+        if base.is_empty() {
+            return Err(anyhow!("no address family enabled for query"));
+        }
+
         let mut fqdn = host.to_owned();
         fqdn.push('.');
         let name = match Name::from_str(&fqdn) {
@@ -1600,11 +2266,12 @@ impl DnsClient {
             Err(e) => return Err(anyhow!("invalid domain name [{}]: {}", host, e)),
         };
 
-        if *crate::option::ENABLE_IPV6 {
+        if base.ipv6 {
             let delay = Duration::from_millis(*crate::option::DNS_DUALSTACK_DELAY_MS);
-            let mut a_fut = Box::pin(self.query_record_type(is_direct, &name, host, RecordType::A));
+            let mut a_fut =
+                Box::pin(self.query_record_type(is_direct, &name, host, RecordType::A, base));
             let mut aaaa_fut =
-                Box::pin(self.query_record_type(is_direct, &name, host, RecordType::AAAA));
+                Box::pin(self.query_record_type(is_direct, &name, host, RecordType::AAAA, base));
 
             let (first, second) = if *crate::option::PREFER_IPV6 {
                 self.dualstack_query(&mut aaaa_fut, &mut a_fut, delay)
@@ -1627,7 +2294,7 @@ impl DnsClient {
         }
 
         let entry = self
-            .query_record_type(is_direct, &name, host, RecordType::A)
+            .query_record_type(is_direct, &name, host, RecordType::A, base)
             .await?;
         let ips = entry.ips.clone();
         self.cache_insert(host, entry).await;

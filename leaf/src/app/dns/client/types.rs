@@ -10,36 +10,110 @@ pub struct EchCacheEntry {
     pub deadline: Instant,
 }
 
+/// DNS-over-HTTPS transport description.
 #[derive(Clone, Debug)]
 struct DohResolver {
     domain: String,
     bootstrap_ip: Option<IpAddr>,
+    port: u16,
+    path: String,
+    /// `h2c://` / `h2c+local://`: cleartext HTTP/2 (no TLS).
+    is_h2c: bool,
     is_direct: bool,
 }
 
+/// DNS-over-QUIC transport description (`quic+local://`).
+#[derive(Clone, Debug)]
+struct QuicResolver {
+    host: String,
+    port: u16,
+}
+
+/// The parsed transport of a name server.
 #[derive(Clone, Debug)]
 enum Resolver {
+    /// Classic UDP DNS. The bool is `+local` (bypass routing).
     Server(SocketAddr, bool),
+    /// DNS over TCP (RFC 7766). The bool is `+local`.
+    Tcp(SocketAddr, bool),
+    /// DNS over HTTPS / h2c.
     DoH(DohResolver),
+    /// DNS over QUIC.
+    Quic(QuicResolver),
+    /// The OS resolver (`localhost` / `system`).
     System(bool),
+    /// The in-process fake-DNS engine (`fakedns`).
+    FakeDns,
 }
 
-#[derive(Clone, Debug, Default)]
-struct ServerRuntimeStats {
-    avg_latency_ms: f64,
-    samples: u64,
-    successes: u64,
-    failures: u64,
-    timeouts: u64,
-    consecutive_slow: u32,
-    consecutive_failures: u32,
+impl Resolver {
+    fn is_direct(&self) -> bool {
+        match self {
+            Self::Server(_, direct) | Self::Tcp(_, direct) | Self::System(direct) => *direct,
+            Self::DoH(doh) => doh.is_direct,
+            Self::Quic(_) | Self::FakeDns => true,
+        }
+    }
+
+    /// Overrides the destination port of the transport, if it has one.
+    fn with_port(&mut self, port: u16) {
+        match self {
+            Self::Server(addr, _) | Self::Tcp(addr, _) => {
+                addr.set_port(port);
+            }
+            Self::DoH(doh) => doh.port = port,
+            Self::Quic(quic) => quic.port = port,
+            Self::System(_) | Self::FakeDns => (),
+        }
+    }
 }
 
-#[derive(Clone, Debug, Default)]
-struct ServerSelectorState {
-    primary_server: Option<String>,
-    stats: HashMap<String, ServerRuntimeStats>,
-    last_reselect_at: Option<Instant>,
+/// A configured name server plus the selection metadata attached to it.
+#[derive(Clone)]
+struct NsClient {
+    resolver: Resolver,
+    domains: Vec<DomainRule>,
+    expected: Option<IpMatcher>,
+    unexpected: Option<IpMatcher>,
+    /// `expectedIPs` contained a literal `"*"`.
+    act_prior: bool,
+    /// `unexpectedIPs` contained a literal `"*"`.
+    act_unprior: bool,
+    strategy: Option<QueryStrategy>,
+    tag: String,
+    timeout: Duration,
+    disable_cache: bool,
+    serve_stale: bool,
+    serve_expired_ttl: u32,
+    final_query: bool,
+    skip_fallback: bool,
+    /// Equality key used by `make_groups` to decide which servers race together.
+    policy_key: String,
+}
+
+impl NsClient {
+    fn is_direct(&self) -> bool {
+        self.resolver.is_direct()
+    }
+
+    fn display_name(&self) -> String {
+        self.resolver.to_string()
+    }
+
+    /// The per-query family filter after applying the server override. A server
+    /// without an explicit strategy inherits the global option unchanged.
+    fn ip_option(&self, base: IpOption) -> IpOption {
+        match self.strategy {
+            Some(strategy) => base.override_with(strategy),
+            None => base,
+        }
+    }
+}
+
+impl fmt::Display for NsClient {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.resolver)
+    }
 }
 
 impl fmt::Display for Resolver {
@@ -52,8 +126,21 @@ impl fmt::Display for Resolver {
                     write!(f, "{}", addr)
                 }
             }
+            Self::Tcp(addr, direct) => {
+                if *direct {
+                    write!(f, "direct:tcp://{}", addr)
+                } else {
+                    write!(f, "tcp://{}", addr)
+                }
+            }
             Self::DoH(doh) => {
-                if doh.is_direct {
+                if doh.is_h2c {
+                    if doh.is_direct {
+                        write!(f, "h2c+local://{}", doh.domain)?;
+                    } else {
+                        write!(f, "h2c://{}", doh.domain)?;
+                    }
+                } else if doh.is_direct {
                     write!(f, "direct:doh:{}", doh.domain)?;
                 } else {
                     write!(f, "doh:{}", doh.domain)?;
@@ -63,6 +150,7 @@ impl fmt::Display for Resolver {
                 }
                 Ok(())
             }
+            Self::Quic(quic) => write!(f, "quic+local://{}:{}", quic.host, quic.port),
             Self::System(direct) => {
                 if *direct {
                     write!(f, "direct:system")
@@ -70,148 +158,26 @@ impl fmt::Display for Resolver {
                     write!(f, "system")
                 }
             }
+            Self::FakeDns => write!(f, "fakedns"),
         }
-    }
-}
-
-impl ServerSelectorState {
-    fn score_of(&self, server: &str) -> f64 {
-        if let Some(stat) = self.stats.get(server) {
-            let baseline = if stat.samples == 0 {
-                (*option::DNS_SERVER_SLOW_RESPONSE_MS as f64) / 2.0
-            } else {
-                stat.avg_latency_ms
-            };
-            baseline
-                + (stat.failures as f64 * 600.0)
-                + (stat.timeouts as f64 * 900.0)
-                + (stat.consecutive_failures as f64 * 1200.0)
-                + (stat.consecutive_slow as f64 * 300.0)
-        } else {
-            (*option::DNS_SERVER_SLOW_RESPONSE_MS as f64) / 2.0
-        }
-    }
-
-    fn is_degraded(&self, server: &str) -> bool {
-        let switch_threshold = (*option::DNS_SERVER_SWITCH_THRESHOLD).max(1);
-        if let Some(stat) = self.stats.get(server) {
-            (stat.consecutive_failures as usize) >= switch_threshold
-                || (stat.consecutive_slow as usize) >= switch_threshold
-        } else {
-            false
-        }
-    }
-
-    fn ensure_candidates(&mut self, servers: &[&Resolver]) {
-        for server in servers {
-            self.stats.entry(server.to_string()).or_default();
-        }
-    }
-
-    fn select_primary_index(&mut self, servers: &[&Resolver]) -> usize {
-        if servers.len() <= 1 {
-            if let Some(server) = servers.first() {
-                self.primary_server = Some(server.to_string());
-            }
-            return 0;
-        }
-        self.ensure_candidates(servers);
-        let now = Instant::now();
-        let reselect_interval =
-            Duration::from_secs((*option::DNS_SERVER_RESELECT_INTERVAL_SECS).max(1));
-        let should_reselect = self
-            .last_reselect_at
-            .map(|last| now.saturating_duration_since(last) >= reselect_interval)
-            .unwrap_or(true);
-
-        let current_idx = self.primary_server.as_ref().and_then(|primary| {
-            servers
-                .iter()
-                .position(|server| server.to_string() == *primary)
-        });
-        if let Some(idx) = current_idx {
-            let current_key = servers[idx].to_string();
-            if !should_reselect && !self.is_degraded(&current_key) {
-                return idx;
-            }
-        }
-
-        let mut best_idx = 0usize;
-        let mut best_score = f64::MAX;
-        for (idx, server) in servers.iter().enumerate() {
-            let score = self.score_of(&server.to_string());
-            if score < best_score {
-                best_score = score;
-                best_idx = idx;
-            }
-        }
-        self.primary_server = Some(servers[best_idx].to_string());
-        self.last_reselect_at = Some(now);
-        best_idx
-    }
-
-    fn fallback_indices(&self, servers: &[&Resolver], preferred_idx: usize) -> Vec<usize> {
-        let mut candidates: Vec<usize> = (0..servers.len())
-            .filter(|idx| *idx != preferred_idx)
-            .collect();
-        candidates.sort_by(|a, b| {
-            let sa = self.score_of(&servers[*a].to_string());
-            let sb = self.score_of(&servers[*b].to_string());
-            sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
-        });
-        candidates
-    }
-
-    fn mark_success(&mut self, server: &str, elapsed: Duration) {
-        let stat = self.stats.entry(server.to_owned()).or_default();
-        let elapsed_ms = elapsed.as_millis() as f64;
-        stat.successes = stat.successes.saturating_add(1);
-        stat.samples = stat.samples.saturating_add(1);
-        if stat.samples == 1 {
-            stat.avg_latency_ms = elapsed_ms;
-        } else {
-            stat.avg_latency_ms = stat.avg_latency_ms * 0.8 + elapsed_ms * 0.2;
-        }
-        let slow_threshold = (*option::DNS_SERVER_SLOW_RESPONSE_MS).max(1) as f64;
-        if elapsed_ms >= slow_threshold {
-            stat.consecutive_slow = stat.consecutive_slow.saturating_add(1);
-        } else {
-            stat.consecutive_slow = 0;
-        }
-        stat.consecutive_failures = 0;
-        if self.primary_server.is_none() {
-            self.primary_server = Some(server.to_owned());
-        }
-    }
-
-    fn mark_failure(&mut self, server: &str, is_timeout: bool) {
-        let stat = self.stats.entry(server.to_owned()).or_default();
-        stat.failures = stat.failures.saturating_add(1);
-        if is_timeout {
-            stat.timeouts = stat.timeouts.saturating_add(1);
-        }
-        stat.consecutive_failures = stat.consecutive_failures.saturating_add(1);
-        let switch_threshold = (*option::DNS_SERVER_SWITCH_THRESHOLD).max(1);
-        if self.primary_server.as_deref() == Some(server)
-            && (stat.consecutive_failures as usize) >= switch_threshold
-        {
-            self.primary_server = None;
-        }
-    }
-
-    fn set_primary(&mut self, server: &str) {
-        self.primary_server = Some(server.to_owned());
-        self.last_reselect_at = Some(Instant::now());
     }
 }
 
 pub struct DnsClient {
     dispatcher: Option<Weak<Dispatcher>>,
-    servers: Vec<Resolver>,
+    servers: Vec<NsClient>,
     hosts: HashMap<String, Vec<IpAddr>>,
+    fakedns: Option<Arc<crate::app::fake_dns::FakeDns>>,
+    client_ip: Option<IpAddr>,
+    query_strategy: QueryStrategy,
+    disable_cache: bool,
+    serve_stale: bool,
+    serve_expired_ttl: u32,
+    disable_fallback: bool,
+    disable_fallback_if_match: bool,
+    enable_parallel_query: bool,
     ipv4_cache: Arc<TokioMutex<LruCache<String, CacheEntry>>>,
     ipv6_cache: Arc<TokioMutex<LruCache<String, CacheEntry>>>,
     ech_cache: Arc<TokioMutex<LruCache<String, EchCacheEntry>>>,
     ech_query_locks: Arc<TokioMutex<HashMap<String, Arc<TokioMutex<()>>>>>,
-    selector_state: Arc<Mutex<ServerSelectorState>>,
 }

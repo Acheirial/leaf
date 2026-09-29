@@ -31,6 +31,17 @@ impl FakeDns {
         self.0.read().await.query_fake_ip(domain)
     }
 
+    /// Returns the fake IP mapped to `domain`, allocating a new one when the
+    /// domain has not been seen before. Used by the `fakedns` DNS server form.
+    pub async fn lookup_or_allocate(&self, domain: &str) -> Result<IpAddr> {
+        let mut inner = self.0.write().await;
+        if let Some(ip) = inner.query_fake_ip(domain) {
+            return Ok(ip);
+        }
+        let ip = inner.allocate_ip(domain)?;
+        Ok(IpAddr::V4(ip))
+    }
+
     pub async fn generate_fake_response(&self, request: &[u8]) -> Result<Vec<u8>> {
         self.0.write().await.generate_fake_response(request)
     }

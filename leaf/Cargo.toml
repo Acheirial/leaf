@@ -74,6 +74,11 @@ all-endpoints = [
     "inbound-tun",
     "inbound-cat",
     "inbound-tproxy",
+    "inbound-vless",
+    "inbound-reality",
+    "inbound-xhttp",
+    "inbound-finalmask",
+    "inbound-hysteria2",
     # outbounds
     "outbound-direct",
     "outbound-drop",
@@ -95,6 +100,9 @@ all-endpoints = [
     "outbound-reality",
     "outbound-mptp",
     "outbound-select",
+    "outbound-xhttp",
+    "outbound-finalmask",
+    "outbound-hysteria2",
 ]
 
 # Ring-related
@@ -139,6 +147,9 @@ outbound-quic = ["rustls"]
 outbound-mptp = []
 outbound-select = ["directories", "axum/query"]
 outbound-vmess = ["lz_fnv", "cfb-mode", "hmac", "sha2", "aes", "aes-gcm", "sha3", "digest", "md-5", "tokio-util", "byteorder", "crc32fast"]
+outbound-xhttp = ["http", "url"]
+outbound-finalmask = ["serde_json"]
+outbound-hysteria2 = ["quinn", "rustls", "h3", "h3-quinn", "blake2"]
 
 # Inbounds
 inbound-mptp = []
@@ -153,6 +164,11 @@ inbound-tls = []
 inbound-chain = []
 inbound-cat = ["tokio/io-std"]
 inbound-tproxy = []
+inbound-vless = []
+inbound-reality = ["reality", "reality-rustls", "rustls-pemfile", "hex", "base64"]
+inbound-xhttp = ["http", "url"]
+inbound-finalmask = ["serde_json"]
+inbound-hysteria2 = ["quinn", "rustls", "h3", "h3-quinn", "blake2"]
 
 plugin = ["async-ffi", "libloading"]
 api = ["axum"]
@@ -267,6 +283,11 @@ tokio-util = { version = "0.7", default-features = false, features = ["io", "cod
 # QUIC
 quinn = { version = "0.11", default-features = false, optional = true }
 rustls = { version = "0.23", default-features = false, features = ["std"], optional = true }
+
+# Hysteria2 (HTTP/3 client for the auth exchange; blake2 for the password hash)
+h3 = { version = "0.0.8", optional = true }
+h3-quinn = { version = "0.0.10", optional = true }
+blake2 = { version = "0.10", optional = true }
 
 # Reality
 reality = { git = "https://github.com/Acheirial/reality-rs.git", rev = "8824b070d4a7b2b33d7553c430d1d3745f858ec2", optional = true }

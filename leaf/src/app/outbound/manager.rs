@@ -31,6 +31,10 @@ use crate::proxy::amux;
 use crate::proxy::direct;
 #[cfg(feature = "outbound-drop")]
 use crate::proxy::drop;
+#[cfg(feature = "outbound-finalmask")]
+use crate::proxy::finalmask;
+#[cfg(feature = "outbound-hysteria2")]
+use crate::proxy::hysteria2;
 #[cfg(feature = "outbound-obfs")]
 use crate::proxy::obfs;
 #[cfg(feature = "outbound-quic")]
@@ -53,6 +57,8 @@ use crate::proxy::vless;
 use crate::proxy::vmess;
 #[cfg(feature = "outbound-ws")]
 use crate::proxy::ws;
+#[cfg(feature = "outbound-xhttp")]
+use crate::proxy::xhttp;
 
 use crate::{
     app::SyncDnsClient,
@@ -344,30 +350,8 @@ impl OutboundManager {
                     let settings =
                         config::TlsOutboundSettings::parse_from_bytes(&outbound.settings)
                             .map_err(|e| anyhow!("invalid [{}] outbound settings: {}", &tag, e))?;
-                    let certificate = if settings.certificate.is_empty() {
-                        None
-                    } else {
-                        Some(settings.certificate.clone())
-                    };
-                    let certificate_key = if settings.certificate_key.is_empty() {
-                        None
-                    } else {
-                        Some(settings.certificate_key.clone())
-                    };
-                    let ech_config_list = if settings.ech_config_list.is_empty() {
-                        None
-                    } else {
-                        Some(settings.ech_config_list.clone())
-                    };
                     let stream = Arc::new(tls::outbound::StreamHandler::new(
-                        settings.server_name.clone(),
-                        settings.alpn.clone(),
-                        certificate,
-                        certificate_key,
-                        settings.insecure,
-                        settings.ech,
-                        settings.ech_disable_dns_lookup,
-                        ech_config_list,
+                        &settings,
                         dns_client.clone(),
                     )?);
                     HandlerBuilder::default()
@@ -421,6 +405,52 @@ impl OutboundManager {
                     HandlerBuilder::default()
                         .tag(tag.clone())
                         .stream_handler(stream)
+                        .build()
+                }
+                #[cfg(feature = "outbound-xhttp")]
+                "xhttp" => {
+                    let settings =
+                        config::XhttpOutboundSettings::parse_from_bytes(&outbound.settings)
+                            .map_err(|e| anyhow!("invalid [{}] outbound settings: {}", &tag, e))?;
+                    let stream = Arc::new(
+                        xhttp::outbound::StreamHandler::new(&settings, dns_client.clone())?,
+                    );
+                    HandlerBuilder::default()
+                        .tag(tag.clone())
+                        .stream_handler(stream)
+                        .build()
+                }
+                #[cfg(feature = "outbound-finalmask")]
+                "finalmask" => {
+                    let settings =
+                        config::FinalmaskOutboundSettings::parse_from_bytes(&outbound.settings)
+                            .map_err(|e| anyhow!("invalid [{}] outbound settings: {}", &tag, e))?;
+                    let stream = Arc::new(finalmask::outbound::StreamHandler::new(&settings)?);
+                    let datagram =
+                        Arc::new(finalmask::outbound::DatagramHandler::new(&settings)?);
+                    HandlerBuilder::default()
+                        .tag(tag.clone())
+                        .stream_handler(stream)
+                        .datagram_handler(datagram)
+                        .build()
+                }
+                #[cfg(feature = "outbound-hysteria2")]
+                "hysteria2" => {
+                    let settings =
+                        config::Hysteria2OutboundSettings::parse_from_bytes(&outbound.settings)
+                            .map_err(|e| anyhow!("invalid [{}] outbound settings: {}", &tag, e))?;
+                    let stream = Arc::new(hysteria2::outbound::StreamHandler::new(
+                        &settings,
+                        dns_client.clone(),
+                    )?);
+                    let datagram = Arc::new(hysteria2::outbound::DatagramHandler::new(
+                        &settings,
+                        dns_client.clone(),
+                    )?);
+                    HandlerBuilder::default()
+                        .tag(tag.clone())
+                        .stream_handler(stream)
+                        .datagram_handler(datagram)
                         .build()
                 }
                 _ => continue,

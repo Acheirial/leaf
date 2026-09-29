@@ -97,7 +97,7 @@ async fn handle_inbound_datagram_inner(
 }
 
 // Handle an inbound transport.
-async fn handle_inbound_transport(
+pub(crate) async fn handle_inbound_transport(
     transport: AnyInboundTransport,
     handler: AnyInboundHandler,
     dispatcher: Arc<Dispatcher>,
@@ -151,8 +151,9 @@ async fn handle_inbound_transport(
 }
 
 // Handle an accepted inbound TCP stream.
-async fn handle_inbound_tcp_stream(
+pub(crate) async fn handle_inbound_tcp_stream(
     stream: TcpStream,
+    destination: Option<SocksAddr>,
     handler: AnyInboundHandler,
     dispatcher: Arc<Dispatcher>,
     nat_manager: Arc<NatManager>,
@@ -163,13 +164,18 @@ async fn handle_inbound_tcp_stream(
     let local_addr = stream
         .local_addr()
         .unwrap_or_else(|_| *crate::option::UNSPECIFIED_BIND_ADDR);
-    let sess = Session {
+    let mut sess = Session {
         network: Network::Tcp,
         source,
         local_addr,
         inbound_tag: handler.tag().clone(),
         ..Default::default()
     };
+    // A transparent inbound knows the original destination already; every
+    // other inbound leaves the destination to its stream handler.
+    if let Some(destination) = destination {
+        sess.destination = destination;
+    }
     let span = sess.span();
     {
         let _g = span.enter();
@@ -215,6 +221,7 @@ async fn handle_tcp_listen(
             // Handle each TCP stream.
             if let Err(e) = handle_inbound_tcp_stream(
                 stream,
+                None,
                 handler_cloned,
                 dispatcher_cloned,
                 nat_manager_cloned,
@@ -235,6 +242,18 @@ async fn handle_udp_listen(
     nat_manager: Arc<NatManager>,
 ) -> io::Result<()> {
     let socket = UdpSocket::bind(&listen_addr).await?;
+    handle_udp_listen_socket(socket, handler, dispatcher, nat_manager).await
+}
+
+// Handle an already-bound inbound UDP socket. Exposed so a listener that has to
+// configure the socket before binding (TPROXY) can reuse the exact same
+// dispatch path.
+pub(crate) async fn handle_udp_listen_socket(
+    socket: UdpSocket,
+    handler: AnyInboundHandler,
+    dispatcher: Arc<Dispatcher>,
+    nat_manager: Arc<NatManager>,
+) -> io::Result<()> {
     let listen_addr = socket.local_addr()?;
     info!("listening udp {}", &listen_addr);
 

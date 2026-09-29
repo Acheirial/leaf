@@ -550,6 +550,12 @@ pub fn start(rt_id: RuntimeId, opts: StartOptions) -> Result<(), Error> {
         runners.push(r.map_err(Error::Config)?);
     }
 
+    #[cfg(feature = "inbound-tproxy")]
+    {
+        let mut tproxy_runners = inbound_manager.get_tproxy_runners().map_err(Error::Config)?;
+        runners.append(&mut tproxy_runners);
+    }
+
     #[cfg(all(feature = "inbound-tun", any(target_os = "macos", target_os = "linux")))]
     sys::post_tun_creation_setup(&net_info);
 

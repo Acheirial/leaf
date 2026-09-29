@@ -140,7 +140,72 @@ fn test_dns_config() {
     let config = crate::config::json::json_from_string(json_str).unwrap();
     let dns = config.dns.as_ref().unwrap();
     assert_eq!(dns.servers.as_ref().unwrap().len(), 1);
-    assert_eq!(dns.servers.as_ref().unwrap()[0], "1.1.1.1");
+    assert_eq!(
+        dns.servers.as_ref().unwrap()[0],
+        crate::config::common::DnsServer::Address("1.1.1.1".to_string())
+    );
+}
+
+#[test]
+fn test_dns_server_object_form_and_expect_ips_alias() {
+    let json_str = r#"
+    {
+        "dns": {
+            "servers": [
+                "1.1.1.1",
+                {
+                    "address": "8.8.8.8",
+                    "port": 53,
+                    "expectIPs": ["10.0.0.0/8"],
+                    "finalQuery": true,
+                    "disableCache": true
+                }
+            ],
+            "disableCache": true,
+            "useSystemHosts": true
+        }
+    }
+    "#;
+
+    let config = crate::config::json::json_from_string(json_str).unwrap();
+    let dns = config.dns.as_ref().unwrap();
+    let servers = dns.servers.as_ref().unwrap();
+    assert_eq!(servers.len(), 2);
+    // The plain string form is accepted.
+    assert_eq!(
+        servers[0],
+        crate::config::common::DnsServer::Address("1.1.1.1".to_string())
+    );
+    // The object form is accepted, and Xray's `expectIPs` spelling is an alias
+    // for `expectedIPs`.
+    match &servers[1] {
+        crate::config::common::DnsServer::Server(server) => {
+            assert_eq!(server.address, "8.8.8.8");
+            assert_eq!(server.port, Some(53));
+            assert_eq!(
+                server.expected_ips.as_deref(),
+                Some(&["10.0.0.0/8".to_string()][..])
+            );
+            assert_eq!(server.final_query, Some(true));
+            assert_eq!(server.disable_cache, Some(true));
+        }
+        other => panic!("expected an object dns server, got {:?}", other),
+    }
+    assert_eq!(dns.disable_cache, Some(true));
+    assert_eq!(dns.use_system_hosts, Some(true));
+
+    // The mapping carries the new fields into the internal config.
+    let internal = crate::config::json::from_string(json_str).unwrap();
+    assert_eq!(internal.dns.servers[0].address, "1.1.1.1");
+    assert_eq!(internal.dns.servers[1].address, "8.8.8.8");
+    assert_eq!(internal.dns.servers[1].port, Some(53));
+    assert_eq!(
+        internal.dns.servers[1].expected_ips,
+        vec!["10.0.0.0/8".to_string()]
+    );
+    assert_eq!(internal.dns.servers[1].final_query, Some(true));
+    assert_eq!(internal.dns.disable_cache, Some(true));
+    assert_eq!(internal.dns.use_system_hosts, Some(true));
 }
 
 #[test]

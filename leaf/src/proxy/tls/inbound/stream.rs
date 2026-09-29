@@ -394,7 +394,10 @@ fn check_certificate_options(entry: &TlsCertificate) -> Result<()> {
             .key_file
             .as_deref()
             .map_or(false, |path| !path.is_empty());
-    if entry.one_time_loading == Some(false) || (entry.one_time_loading.is_none() && from_file) {
+    // Inline certificate/key material is always loaded once (as Xray forces). File-backed
+    // entries would be hot-reloaded by Xray unless `oneTimeLoading` is set, which is not
+    // implemented here, so require the caller to opt into one-time loading explicitly.
+    if from_file && entry.one_time_loading != Some(true) {
         return Err(anyhow::anyhow!(
             "invalid \"certificates\": certificate hot reload is not supported; set oneTimeLoading to true"
         ));
@@ -569,6 +572,12 @@ fn subject_common_name(subject: &[u8]) -> Option<String> {
 fn subject_alt_names(extensions: &[u8]) -> Vec<String> {
     const SUBJECT_ALT_NAME_OID: &[u8] = &[0x55, 0x1d, 0x11];
     let mut names = Vec::new();
+    // `extensions` is the content of the `[3] EXPLICIT` field, i.e. the DER of
+    // `SEQUENCE OF Extension`; strip that outer SEQUENCE first.
+    let mut outer = Der::new(extensions);
+    let Some((_tag, extensions)) = outer.read_tlv() else {
+        return names;
+    };
     let mut extensions = Der::new(extensions);
     while let Some((tag, extension)) = extensions.read_tlv() {
         if tag != 0x30 {
@@ -587,6 +596,11 @@ fn subject_alt_names(extensions: &[u8]) -> Vec<String> {
             value = extension.read_tlv();
         }
         let Some((0x04, san)) = value else {
+            continue;
+        };
+        // The OCTET STRING wraps `GeneralNames ::= SEQUENCE OF GeneralName`.
+        let mut san = Der::new(san);
+        let Some((_tag, san)) = san.read_tlv() else {
             continue;
         };
         let mut general_names = Der::new(san);

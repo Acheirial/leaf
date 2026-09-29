@@ -11,12 +11,11 @@ use {
     std::{fs::File, io::BufReader, io::Cursor},
     tokio_rustls::{
         rustls::{
-            client::{ClientSessionMemoryCache, WebPkiServerVerifier},
-            client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
+            client::danger::ServerCertVerifier,
+            client::{ClientSessionMemoryCache, Resumption, WebPkiServerVerifier},
             crypto::{CryptoProvider, SupportedKxGroup},
-            pki_types::{CertificateDer, ServerName, UnixTime},
-            version, ClientConfig, DigitallySignedStruct, Error, KeyLogFile, Resumption,
-            RootCertStore, SignatureScheme, SupportedProtocolVersion,
+            pki_types::ServerName,
+            version, ClientConfig, KeyLogFile, RootCertStore, SupportedProtocolVersion,
         },
         TlsConnector,
     },
@@ -29,7 +28,7 @@ use tokio_rustls::rustls::pki_types::{pem::PemObject, EchConfigListBytes};
 
 #[cfg(feature = "openssl-tls")]
 use {
-    openssl::ssl::{Ssl, SslConnector, SslMethod, SslVersion},
+    openssl::ssl::{Ssl, SslConnector, SslMethod, SslOptions, SslSessionCacheMode, SslVersion},
     openssl::x509::X509,
     std::pin::Pin,
     std::sync::Once,
@@ -125,10 +124,6 @@ struct RustlsClientOptions {
 
 pub struct Handler {
     server_name: String,
-    #[cfg(feature = "rustls-tls")]
-    alpns: Vec<String>,
-    #[cfg(feature = "rustls-tls")]
-    insecure: bool,
     #[cfg(feature = "rustls-tls")]
     fixed_ech_config_list: Option<String>,
     #[cfg(feature = "rustls-tls")]
@@ -618,10 +613,6 @@ impl Handler {
         let mut handler = Handler {
             server_name,
             #[cfg(feature = "rustls-tls")]
-            alpns: alpns.clone(),
-            #[cfg(feature = "rustls-tls")]
-            insecure: settings.insecure,
-            #[cfg(feature = "rustls-tls")]
             fixed_ech_config_list: if settings.ech_config_list.is_empty() {
                 None
             } else {
@@ -670,6 +661,11 @@ impl Handler {
             handler.ssl_connector = Some(Self::build_openssl_connector(settings, &alpns)?);
         }
 
+        #[cfg(not(feature = "rustls-tls"))]
+        let _ = &dns_client;
+        #[cfg(not(any(feature = "rustls-tls", feature = "openssl-tls")))]
+        let _ = &alpns;
+
         Ok(handler)
     }
 
@@ -706,11 +702,6 @@ impl Handler {
                 "tls outbound curve_preferences is not supported by the openssl backend"
             ));
         }
-        if settings.enable_session_resumption == Some(true) {
-            return Err(anyhow!(
-                "tls outbound enable_session_resumption is not supported by the openssl backend"
-            ));
-        }
         if settings
             .master_key_log
             .as_deref()
@@ -729,6 +720,18 @@ impl Handler {
 
         let mut builder =
             SslConnector::builder(SslMethod::tls()).expect("create ssl connector failed");
+
+        match settings.enable_session_resumption {
+            // OpenSSL's client session cache is enabled by default.
+            Some(true) => {
+                builder.set_session_cache_mode(SslSessionCacheMode::CLIENT);
+            }
+            Some(false) => {
+                builder.set_session_cache_mode(SslSessionCacheMode::OFF);
+                builder.set_options(SslOptions::NO_TICKET);
+            }
+            None => {}
+        }
 
         if let Some(value) = settings.min_version.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
             builder
@@ -1103,7 +1106,9 @@ mod tests {
 
     fn new_test_dns_client() -> SyncDnsClient {
         let mut dns = crate::config::Dns::new();
-        dns.servers.push("1.1.1.1".to_string());
+        let mut server = crate::config::DnsServer::new();
+        server.address = "1.1.1.1".to_string();
+        dns.servers.push(server);
         let dns = MessageField::some(dns);
         Arc::new(RwLock::new(DnsClient::new(&dns).unwrap()))
     }
