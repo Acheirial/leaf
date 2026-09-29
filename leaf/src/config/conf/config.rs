@@ -1200,6 +1200,7 @@ pub fn to_common(conf: &Config) -> Result<common::Config> {
                             .uuid
                             .clone()
                             .or_else(|| ext_proxy.password.clone()), // prioritize uuid, then password
+                        encryption: None,
                     };
 
                     let mut next_tag = ext_proxy.tag.clone();

@@ -39,7 +39,7 @@ impl Fallbacks {
                 name: fb.name.clone().unwrap_or_default(),
                 alpn: fb.alpn.clone().unwrap_or_default(),
                 path: fb.path.clone().unwrap_or_default(),
-                type_: fb.type_field.clone().unwrap_or_default(),
+                type_: fb.type_.clone().unwrap_or_default(),
                 dest: fb.dest.clone().unwrap_or_default(),
                 xver: fb.xver.unwrap_or(0),
             };
@@ -95,7 +95,7 @@ impl Fallbacks {
         }
         // Inherit the wildcard name's paths for every alpn.
         if let Some(default_names) = map.get("") {
-            let snapshot: Vec<(String, AlpnMap)> = default_names
+            let snapshot: Vec<(String, HashMap<String, Fallback>)> = default_names
                 .iter()
                 .map(|(alpn, pfb)| {
                     (
@@ -285,9 +285,10 @@ mod tests {
             name: Some(name.to_string()),
             alpn: Some(alpn.to_string()),
             path: Some(path.to_string()),
-            type_field: Some("tcp".to_string()),
+            type_: Some("tcp".to_string()),
             dest: Some(dest.to_string()),
             xver: None,
+            ..Default::default()
         }
     }
 

@@ -468,7 +468,7 @@ pub struct ChunkedWriter<W> {
     shutdown: bool,
 }
 
-impl<W> ChunkedWriter<W> {
+impl<W: Unpin> ChunkedWriter<W> {
     pub fn new(inner: W) -> Self {
         ChunkedWriter {
             inner,

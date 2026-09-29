@@ -164,7 +164,7 @@ impl InboundStreamHandler for Handler {
         let request = match encoding::read_request(&mut peek).await {
             Ok(request) => request,
             Err(e) => {
-                let seen = peek.take();
+                let seen = peek.take_seen();
                 let stream = peek.into_inner();
                 if self.fallbacks.is_empty() {
                     return Err(e);
@@ -261,7 +261,7 @@ impl<S> PeekStream<S> {
         }
     }
 
-    fn take(&mut self) -> Vec<u8> {
+    fn take_seen(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.seen)
     }
 

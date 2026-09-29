@@ -922,7 +922,10 @@ mod tests {
             ech_server_keys: Some("AQID".to_string()),
             ..Default::default()
         };
-        let err = super::Handler::new(&settings).unwrap_err().to_string();
+        let err = super::Handler::new(&settings)
+            .err()
+            .expect("Handler::new should reject this configuration")
+            .to_string();
         assert!(err.contains("echServerKeys"), "{}", err);
     }
 
@@ -940,7 +943,10 @@ mod tests {
             }],
             ..Default::default()
         };
-        let err = super::Handler::new(&settings).unwrap_err().to_string();
+        let err = super::Handler::new(&settings)
+            .err()
+            .expect("Handler::new should reject this configuration")
+            .to_string();
         assert!(err.contains("issue"), "{}", err);
     }
 
@@ -955,7 +961,10 @@ mod tests {
             cipher_suites: Some("TLS_NOT_A_REAL_SUITE".to_string()),
             ..Default::default()
         };
-        let err = super::Handler::new(&settings).unwrap_err().to_string();
+        let err = super::Handler::new(&settings)
+            .err()
+            .expect("Handler::new should reject this configuration")
+            .to_string();
         assert!(err.contains("unknown tls cipher_suite"), "{}", err);
     }
 

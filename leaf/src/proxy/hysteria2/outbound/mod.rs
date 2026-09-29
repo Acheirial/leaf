@@ -10,12 +10,12 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
+use ::http::{HeaderValue, Method, Request, StatusCode};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
-use http::{HeaderValue, Method, Request, StatusCode};
 use parking_lot::Mutex as SyncMutex;
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt, ReadBuf};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::timeout;
 use tracing::{debug, trace, warn, Instrument};

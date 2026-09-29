@@ -174,7 +174,7 @@ impl Unpadder {
         }
         self.buffer.extend_from_slice(data);
         let mut out = Vec::new();
-        let mut off = self.consume(&mut out);
+        let off = self.consume(&mut out);
         self.buffer.drain(..off);
         out
     }

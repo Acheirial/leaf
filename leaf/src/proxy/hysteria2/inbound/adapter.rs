@@ -8,7 +8,6 @@
 //! forwards the stream to the TCP proxy or replays the bytes into h3 as a
 //! regular request.
 
-use std::future::Future;
 use std::io;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};

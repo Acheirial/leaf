@@ -16,12 +16,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use ::http::{Method, Request, Response, StatusCode};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::task::{Context, Poll};
 use futures::Stream;
-use http::{Method, Request, Response, StatusCode};
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tracing::{debug, trace};
@@ -547,7 +547,8 @@ async fn handle_proxied_stream(
         stream_id: Some(StreamId::U64(send.id().index())),
         ..Default::default()
     };
-    let transport = BaseInboundTransport::Stream(Box::new(StreamProxyStream { recv, send }), sess);
+    let transport =
+        AnyBaseInboundTransport::Stream(Box::new(StreamProxyStream { recv, send }), sess);
     if tx.send(transport).await.is_err() {
         debug!("hysteria2 inbound: inbound transport is gone");
     }

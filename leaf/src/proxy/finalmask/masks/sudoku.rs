@@ -1141,6 +1141,12 @@ impl TcpFactory {
     }
 }
 
+impl std::fmt::Debug for TcpFactory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("TcpFactory(sudoku)")
+    }
+}
+
 impl TcpMaskFactory for TcpFactory {
     fn create(&self, role: Role) -> io::Result<Box<dyn TcpMask>> {
         Ok(Box::new(TcpMaskImpl {
@@ -1211,6 +1217,12 @@ impl UdpFactory {
             p_min,
             p_max,
         })
+    }
+}
+
+impl std::fmt::Debug for UdpFactory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("UdpFactory(sudoku)")
     }
 }
 
@@ -1370,7 +1382,7 @@ fn sha256(data: &[u8]) -> [u8; 32] {
 
 const RNG_LEN: i32 = 607;
 const RNG_TAP: i32 = 273;
-const INT32MAX: i32 = (1 << 31) - 1;
+const INT32MAX: i32 = i32::MAX;
 
 /// `rngCooked` from Go's `math/rand/rng.go`.
 const RNG_COOKED: [i64; 607] = [

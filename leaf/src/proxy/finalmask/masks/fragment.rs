@@ -174,6 +174,12 @@ impl FragmentFactory {
     }
 }
 
+impl std::fmt::Debug for FragmentFactory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("FragmentFactory")
+    }
+}
+
 impl TcpMaskFactory for FragmentFactory {
     fn create(&self, role: Role) -> io::Result<Box<dyn TcpMask>> {
         Ok(Box::new(FragmentMask {

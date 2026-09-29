@@ -274,7 +274,9 @@ mod tests {
             dns_server("https://"),
             dns_server("not-an-ip"),
         ];
-        let err = DnsClient::load_servers(&dns, "dnsclient").unwrap_err();
+        let err = DnsClient::load_servers(&dns, "dnsclient")
+            .err()
+            .expect("load_servers should reject the invalid server list");
         assert!(err.to_string().contains("no dns servers"));
     }
 

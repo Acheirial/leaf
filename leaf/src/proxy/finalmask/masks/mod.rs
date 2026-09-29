@@ -48,7 +48,10 @@ pub trait TcpMask: Send + Sync + Unpin {
 }
 
 /// Creates a fresh [`TcpMask`] for a new connection.
-pub trait TcpMaskFactory: Send + Sync + Unpin {
+///
+/// A factory is [`std::fmt::Debug`] so a chain can be inspected; the impls
+/// name the mask type only and never print configured secrets.
+pub trait TcpMaskFactory: Send + Sync + Unpin + std::fmt::Debug {
     fn create(&self, role: Role) -> io::Result<Box<dyn TcpMask>>;
 }
 
@@ -71,7 +74,10 @@ pub trait UdpMask: Send + Sync + Unpin {
 }
 
 /// Creates a fresh [`UdpMask`] for a new socket.
-pub trait UdpMaskFactory: Send + Sync + Unpin {
+///
+/// A factory is [`std::fmt::Debug`] so a chain can be inspected; the impls
+/// name the mask type only and never print configured secrets.
+pub trait UdpMaskFactory: Send + Sync + Unpin + std::fmt::Debug {
     fn create(&self, role: Role) -> io::Result<Box<dyn UdpMask>>;
 }
 

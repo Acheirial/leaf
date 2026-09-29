@@ -81,6 +81,12 @@ impl SalamanderFactory {
     }
 }
 
+impl std::fmt::Debug for SalamanderFactory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SalamanderFactory")
+    }
+}
+
 impl UdpMaskFactory for SalamanderFactory {
     fn create(&self, _role: super::Role) -> io::Result<Box<dyn UdpMask>> {
         Ok(Box::new(SalamanderMask {

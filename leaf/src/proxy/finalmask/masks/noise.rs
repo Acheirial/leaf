@@ -107,6 +107,12 @@ impl NoiseFactory {
     }
 }
 
+impl std::fmt::Debug for NoiseFactory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("NoiseFactory")
+    }
+}
+
 impl UdpMaskFactory for NoiseFactory {
     fn create(&self, _role: Role) -> io::Result<Box<dyn UdpMask>> {
         Ok(Box::new(NoiseMask {
