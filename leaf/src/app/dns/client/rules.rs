@@ -24,14 +24,19 @@ enum DomainRule {
 
 impl DomainRule {
     fn parse(rule: &str) -> Result<Self> {
+        // Xray lowercases `full:`/`domain:`/`keyword:`/bare values while
+        // building its matcher, and query domains are lowercased too
+        // (`sort_clients`), so a rule with an uppercase letter would otherwise
+        // never match. `regexp:` patterns are kept verbatim (they are already
+        // matched against the lowercased domain).
         if let Some(v) = rule.strip_prefix("full:") {
-            return Ok(Self::Full(v.to_owned()));
+            return Ok(Self::Full(v.to_lowercase()));
         }
         if let Some(v) = rule.strip_prefix("domain:") {
-            return Ok(Self::Domain(v.to_owned()));
+            return Ok(Self::Domain(v.to_lowercase()));
         }
         if let Some(v) = rule.strip_prefix("keyword:") {
-            return Ok(Self::Keyword(v.to_owned()));
+            return Ok(Self::Keyword(v.to_lowercase()));
         }
         if let Some(v) = rule.strip_prefix("regexp:") {
             #[cfg(feature = "regex")]
@@ -48,7 +53,7 @@ impl DomainRule {
                 ));
             }
         }
-        Ok(Self::Substr(rule.to_owned()))
+        Ok(Self::Substr(rule.to_lowercase()))
     }
 
     fn matches(&self, domain: &str) -> bool {

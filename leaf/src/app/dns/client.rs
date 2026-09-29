@@ -52,6 +52,12 @@ include!("client/types.rs");
 include!("client/rules.rs");
 include!("client/selector.rs");
 
+/// EDNS0 UDP payload size advertised in queries (`build_edns_ecs`) and the size
+/// of the receive buffer for plain-UDP answers. Both are derived from this one
+/// constant so they cannot drift: a compliant server's answer (at most this
+/// size) always fits the buffer, and the kernel cannot silently truncate it.
+const EDNS_UDP_PAYLOAD_SIZE: usize = 4096;
+
 impl DnsClient {
     // ---------------------------------------------------------------- config
 
@@ -82,7 +88,10 @@ impl DnsClient {
         }
 
         // Bare `host[:port]` is UDP classic DNS.
-        Ok(Resolver::Server(Self::parse_ip_host_port(server, 53)?, is_direct))
+        Ok(Resolver::Server(
+            Self::parse_ip_host_port(server, 53)?,
+            is_direct,
+        ))
     }
 
     fn parse_scheme(scheme: &str, rest: &str, is_direct: bool) -> Result<Resolver> {
@@ -192,7 +201,10 @@ impl DnsClient {
                 (rest, None)
             };
             if domain.is_empty() {
-                return Err(anyhow!("invalid dns server [doh:{}]: empty doh domain", rest));
+                return Err(anyhow!(
+                    "invalid dns server [doh:{}]: empty doh domain",
+                    rest
+                ));
             }
             let mut fqdn = domain.to_owned();
             fqdn.push('.');
@@ -286,7 +298,12 @@ impl DnsClient {
         format!(
             "client=none|skip={}|qs={}|tag={}|domains={}|expected={}|unexpected={}",
             server.skip_fallback.unwrap_or(false) as u8,
-            server.query_strategy.as_deref().unwrap_or("").trim().to_lowercase(),
+            server
+                .query_strategy
+                .as_deref()
+                .unwrap_or("")
+                .trim()
+                .to_lowercase(),
             server.tag.as_deref().unwrap_or("").trim().to_lowercase(),
             normalized(&server.domains),
             normalized(&server.expected_ips),
@@ -294,11 +311,7 @@ impl DnsClient {
         )
     }
 
-    fn build_ns_client(
-        server: &crate::config::DnsServer,
-        dns: &crate::config::Dns,
-        default_tag: &str,
-    ) -> Result<NsClient> {
+    fn build_ns_client(server: &crate::config::DnsServer, default_tag: &str) -> Result<NsClient> {
         let mut resolver = Self::parse_server(&server.address)?;
         if let Some(port) = server.port {
             if port == 0 || port > u16::MAX as u32 {
@@ -306,10 +319,19 @@ impl DnsClient {
             }
             resolver.with_port(port as u16);
         }
+        // A `fakedns` entry is accepted unconditionally: the device-wide
+        // `FakeDns` engine is registered with `replace_fakedns` right after
+        // this client is constructed, so acceptance cannot be decided here.
+        // When no engine has been registered, `query_fakedns` reports a named
+        // error and the query falls through to the remaining servers, which
+        // keeps `["fakedns", "<real server>"]` resolvable.
         let domains = parse_domain_rules(&server.domains)?;
         let (expected, act_prior) = IpMatcher::parse(&server.expected_ips)?;
         let (unexpected, act_unprior) = IpMatcher::parse(&server.unexpected_ips)?;
-        let strategy = server.query_strategy.as_ref().map(|s| QueryStrategy::parse(s));
+        let strategy = server
+            .query_strategy
+            .as_ref()
+            .map(|s| QueryStrategy::parse(s));
         let tag = server
             .tag
             .as_ref()
@@ -321,15 +343,26 @@ impl DnsClient {
             .filter(|v| *v > 0)
             .map(Duration::from_millis)
             .unwrap_or_else(|| Duration::from_secs(*option::DNS_TIMEOUT));
-        let disable_cache = server
-            .disable_cache
-            .unwrap_or_else(|| dns.disable_cache.unwrap_or(false));
-        let serve_stale = server
-            .serve_stale
-            .unwrap_or_else(|| dns.serve_stale.unwrap_or(false));
-        let serve_expired_ttl = server
-            .serve_expired_ttl
-            .unwrap_or_else(|| dns.serve_expired_ttl.unwrap_or(0));
+        // The cache is a single global LRU per family, keyed by host
+        // (`ipv4_cache`/`ipv6_cache`), and stale-serving is decided in
+        // `_lookup_inner` before any server is selected. Per-server cache
+        // semantics are therefore impossible to honour: reject the options here
+        // rather than accepting them and silently applying the global values.
+        if server.disable_cache.is_some() {
+            return Err(anyhow!(
+                "per-server disableCache is not supported: the dns cache is global"
+            ));
+        }
+        if server.serve_stale.is_some() {
+            return Err(anyhow!(
+                "per-server serveStale is not supported: the dns cache is global"
+            ));
+        }
+        if server.serve_expired_ttl.is_some() {
+            return Err(anyhow!(
+                "per-server serveExpiredTTL is not supported: the dns cache is global"
+            ));
+        }
         let policy_key = Self::build_policy_key(server);
         Ok(NsClient {
             resolver,
@@ -341,9 +374,6 @@ impl DnsClient {
             strategy,
             tag,
             timeout,
-            disable_cache,
-            serve_stale,
-            serve_expired_ttl,
             final_query: server.final_query.unwrap_or(false),
             skip_fallback: server.skip_fallback.unwrap_or(false),
             policy_key,
@@ -353,7 +383,7 @@ impl DnsClient {
     fn load_servers(dns: &crate::config::Dns, default_tag: &str) -> Result<Vec<NsClient>> {
         let mut servers = Vec::new();
         for server in dns.servers.iter() {
-            match Self::build_ns_client(server, dns, default_tag) {
+            match Self::build_ns_client(server, default_tag) {
                 Ok(client) => servers.push(client),
                 Err(err) => warn!("skip invalid dns server [{}]: {}", server.address, err),
             }
@@ -689,7 +719,13 @@ impl DnsClient {
         })
         .await
         .map_err(|e| anyhow!("spawn blocking failed: {}", e))?;
-        addr.ok_or_else(|| anyhow!("bootstrap failed: no resolved address for {}:{}", host, port))
+        addr.ok_or_else(|| {
+            anyhow!(
+                "bootstrap failed: no resolved address for {}:{}",
+                host,
+                port
+            )
+        })
     }
 
     async fn connect_doh_tcp_stream(
@@ -876,8 +912,7 @@ impl DnsClient {
                     continue;
                 }
             };
-            let stream = match self.connect_doh_tcp_stream(doh, bootstrap_addr, tag).await
-            {
+            let stream = match self.connect_doh_tcp_stream(doh, bootstrap_addr, tag).await {
                 Ok(stream) => stream,
                 Err(err) => {
                     debug!("connect doh stream failed: {}", err);
@@ -891,7 +926,8 @@ impl DnsClient {
                     continue;
                 }
             };
-            let request_header = Self::build_doh_http_request(&doh.domain, &doh.path, request.len());
+            let request_header =
+                Self::build_doh_http_request(&doh.domain, &doh.path, request.len());
             if let Err(err) = stream.write_all(request_header.as_bytes()).await {
                 debug!("write doh http header failed: {}", err);
                 continue;
@@ -929,7 +965,12 @@ impl DnsClient {
                     debug!(
                         "received from server={} ttl={} elapsed={}ms ips={:?}",
                         resolver,
-                        message.answers().iter().next().map(|a| a.ttl()).unwrap_or(0),
+                        message
+                            .answers()
+                            .iter()
+                            .next()
+                            .map(|a| a.ttl())
+                            .unwrap_or(0),
                         elapsed.as_millis(),
                         &entry.ips
                     );
@@ -972,8 +1013,7 @@ impl DnsClient {
                     continue;
                 }
             };
-            let stream = match self.connect_doh_tcp_stream(doh, bootstrap_addr, tag).await
-            {
+            let stream = match self.connect_doh_tcp_stream(doh, bootstrap_addr, tag).await {
                 Ok(stream) => stream,
                 Err(err) => {
                     debug!("connect doh stream failed: {}", err);
@@ -1023,11 +1063,14 @@ impl DnsClient {
         tag: &str,
     ) -> Result<CacheEntry> {
         if doh.is_h2c {
-            return self.query_with_doh_h2c(request, host, resolver, doh, tag).await;
+            return self
+                .query_with_doh_h2c(request, host, resolver, doh, tag)
+                .await;
         }
         #[cfg(feature = "dns-tls")]
         {
-            self.query_with_doh_tls(request, host, resolver, doh, tag).await
+            self.query_with_doh_tls(request, host, resolver, doh, tag)
+                .await
         }
         #[cfg(not(feature = "dns-tls"))]
         {
@@ -1467,10 +1510,9 @@ impl DnsClient {
             RecordType::A => (),
             _ => return Err(anyhow!("fakedns only answers A queries")),
         }
-        let fakedns = self
-            .fakedns
-            .as_ref()
-            .ok_or_else(|| anyhow!("fakedns server is configured but no fake-DNS engine is available"))?;
+        let fakedns = self.fakedns.as_ref().ok_or_else(|| {
+            anyhow!("fakedns server is configured but no fake-DNS engine is available")
+        })?;
         let ip = fakedns
             .lookup_or_allocate(host)
             .await
@@ -1533,7 +1575,7 @@ impl DnsClient {
                     continue;
                 }
 
-                let mut buf = vec![0u8; 512];
+                let mut buf = vec![0u8; EDNS_UDP_PAYLOAD_SIZE];
                 let n = match timeout(
                     Duration::from_secs(*option::DNS_TIMEOUT),
                     r.recv_from(&mut buf),
@@ -1640,7 +1682,8 @@ impl DnsClient {
         data.push(0);
         data.extend_from_slice(&mask);
         let mut edns = Edns::new();
-        edns.set_max_payload(1350).set_version(0);
+        edns.set_max_payload(EDNS_UDP_PAYLOAD_SIZE as u16)
+            .set_version(0);
         edns.options_mut().insert(EdnsOption::Unknown(8, data));
         edns
     }
@@ -1719,7 +1762,9 @@ impl DnsClient {
                         continue;
                     }
                 };
-                let stream = match self.connect_doh_tcp_stream(doh, bootstrap_addr, "dnsclient").await
+                let stream = match self
+                    .connect_doh_tcp_stream(doh, bootstrap_addr, "dnsclient")
+                    .await
                 {
                     Ok(stream) => stream,
                     Err(err) => {
@@ -1798,7 +1843,8 @@ impl DnsClient {
                 let value = data.to_string();
                 if let Some(ech_config_list) = Self::extract_ech_config_list(&value) {
                     let ttl = ans.ttl();
-                    let Some(deadline) = Instant::now().checked_add(Duration::from_secs(ttl.into()))
+                    let Some(deadline) =
+                        Instant::now().checked_add(Duration::from_secs(ttl.into()))
                     else {
                         return Err(anyhow!("invalid ttl"));
                     };
@@ -1845,7 +1891,7 @@ impl DnsClient {
                     debug!("send DNS ech query failed: {}", err);
                     continue;
                 }
-                let mut buf = vec![0u8; 2048];
+                let mut buf = vec![0u8; EDNS_UDP_PAYLOAD_SIZE];
                 let n = match timeout(
                     Duration::from_secs(*option::DNS_TIMEOUT),
                     r.recv_from(&mut buf),
@@ -1900,10 +1946,7 @@ impl DnsClient {
                 self.query_ech_with_doh(request, host, &client.resolver, doh, ty)
                     .await
             }
-            _ => Err(anyhow!(
-                "server {} does not support ECH queries",
-                client
-            )),
+            _ => Err(anyhow!("server {} does not support ECH queries", client)),
         }
     }
 
@@ -2069,14 +2112,11 @@ impl DnsClient {
         ty: RecordType,
     ) -> Result<CacheEntry> {
         debug!(
-            "query {} {} via {} (tag={}, disable_cache={}, serve_stale={}, serve_expired_ttl={})",
+            "query {} {} via {} (tag={})",
             host,
             ty,
             client.display_name(),
             client.tag,
-            client.disable_cache,
-            client.serve_stale,
-            client.serve_expired_ttl,
         );
         let entry = match timeout(
             client.timeout,

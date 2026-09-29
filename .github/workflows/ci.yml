@@ -111,6 +111,14 @@ jobs:
         with:
           submodules: true
 
+      - name: install mdbook
+        uses: peaceiris/actions-mdbook@v2
+        with:
+          mdbook-version: 'latest'
+
+      - name: build book
+        run: mdbook build docs
+
       - name: install rust toolchain
         uses: hecrj/setup-rust-action@v1
         with:

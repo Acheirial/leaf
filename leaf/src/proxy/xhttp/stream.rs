@@ -1,0 +1,49 @@
+//! A stream whose two halves come from different places.
+//!
+//! XHTTP's whole point is that the uplink and the downlink are separate
+//! request/response pairs, so the connection handed to the payload protocol
+//! reads from one and writes to another.
+
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+
+pub struct SplitStream<R, W> {
+    pub reader: R,
+    pub writer: W,
+}
+
+impl<R, W> SplitStream<R, W> {
+    pub fn new(reader: R, writer: W) -> Self {
+        SplitStream { reader, writer }
+    }
+}
+
+impl<R: AsyncRead + Unpin, W: Unpin> AsyncRead for SplitStream<R, W> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().reader).poll_read(cx, buf)
+    }
+}
+
+impl<R: Unpin, W: AsyncWrite + Unpin> AsyncWrite for SplitStream<R, W> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        Pin::new(&mut self.get_mut().writer).poll_write(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().writer).poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().writer).poll_shutdown(cx)
+    }
+}

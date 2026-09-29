@@ -40,8 +40,7 @@ mod imp {
     const IP6T_SO_ORIGINAL_DST: libc::c_int = libc::IP6T_SO_ORIGINAL_DST;
 
     /// Returned when a receive path could not report a peer address.
-    const UNSPECIFIED: SocketAddr =
-        SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0);
+    const UNSPECIFIED: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0);
 
     fn setsockopt_int(
         fd: RawFd,
@@ -92,8 +91,7 @@ mod imp {
                 (storage, size_of::<libc::sockaddr_in>() as libc::socklen_t)
             }
             SocketAddr::V6(v6) => {
-                let sin6 =
-                    &mut storage as *mut libc::sockaddr_storage as *mut libc::sockaddr_in6;
+                let sin6 = &mut storage as *mut libc::sockaddr_storage as *mut libc::sockaddr_in6;
                 unsafe {
                     (*sin6).sin6_family = libc::AF_INET6 as libc::sa_family_t;
                     (*sin6).sin6_port = v6.port().to_be();
@@ -158,6 +156,12 @@ mod imp {
     fn cmsg_align(len: usize) -> usize {
         let align = size_of::<usize>();
         (len + align - 1) & !(align - 1)
+    }
+
+    /// `CMSG_LEN(0)`: the smallest a control-message record can be — the
+    /// aligned size of the header carrying no payload.
+    fn cmsg_len_0() -> usize {
+        cmsg_align(size_of::<libc::cmsghdr>())
     }
 
     unsafe fn sockaddr_in_to_socketaddr(sin: &libc::sockaddr_in) -> Option<SocketAddr> {
@@ -330,8 +334,9 @@ mod imp {
     /// The original destination is read from the `IP_RECVORIGDSTADDR` /
     /// `IPV6_RECVORIGDSTADDR` control message; when it is absent the local
     /// address from `IP_PKTINFO` is used, and failing that the peer address.
-    /// The returned error is `WouldBlock` when the socket has no data, so the
-    /// caller can drive this from tokio's `try_io`.
+    /// The returned error is `WouldBlock` when the socket has no data; the
+    /// caller drives this from tokio's `async_io`, which awaits readiness and
+    /// retries on `WouldBlock` rather than surfacing it.
     pub fn recv_from_original_dst<S: AsRawFd>(
         sock: &S,
         buf: &mut [u8],
@@ -377,7 +382,10 @@ mod imp {
         while offset + size_of::<libc::cmsghdr>() <= used {
             let cmsg = unsafe { base.add(offset) as *const libc::cmsghdr };
             let cmsg_len = unsafe { (*cmsg).cmsg_len } as usize;
-            if cmsg_len < size_of::<libc::cmsghdr>() {
+            // Reject a malformed/truncated control buffer: the record must be at
+            // least `CMSG_LEN(0)` long and must fit inside the bytes the kernel
+            // reported as used. Stop the walk rather than reading out of bounds.
+            if cmsg_len < cmsg_len_0() || cmsg_len > used - offset {
                 break;
             }
             let level = unsafe { (*cmsg).cmsg_level };

@@ -408,7 +408,11 @@ fn check_certificate_options(entry: &TlsCertificate) -> Result<()> {
 
 #[cfg(feature = "rustls-tls")]
 fn certificate_material(entry: &TlsCertificate) -> Result<String> {
-    resolve_material(entry.certificate_file.as_deref(), &entry.certificate, "certificate")
+    resolve_material(
+        entry.certificate_file.as_deref(),
+        &entry.certificate,
+        "certificate",
+    )
 }
 
 #[cfg(feature = "rustls-tls")]

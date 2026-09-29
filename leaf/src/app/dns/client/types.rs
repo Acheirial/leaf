@@ -51,7 +51,12 @@ impl Resolver {
         match self {
             Self::Server(_, direct) | Self::Tcp(_, direct) | Self::System(direct) => *direct,
             Self::DoH(doh) => doh.is_direct,
-            Self::Quic(_) | Self::FakeDns => true,
+            Self::Quic(_) => true,
+            // `FakeDns` never becomes an `NsClient` (it is rejected in
+            // `build_ns_client`), but it is not a direct transport either: if it
+            // were the only "direct" server it would shadow the real servers in
+            // `collect_servers(true)` and break `direct_lookup` fallback.
+            Self::FakeDns => false,
         }
     }
 
@@ -82,9 +87,6 @@ struct NsClient {
     strategy: Option<QueryStrategy>,
     tag: String,
     timeout: Duration,
-    disable_cache: bool,
-    serve_stale: bool,
-    serve_expired_ttl: u32,
     final_query: bool,
     skip_fallback: bool,
     /// Equality key used by `make_groups` to decide which servers race together.

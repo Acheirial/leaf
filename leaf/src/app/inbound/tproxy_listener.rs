@@ -73,7 +73,7 @@ async fn handle_tcp(
     info!("listening tcp {}", &local_addr);
 
     loop {
-        let (stream, _) = listener.accept().await?;
+        let (stream, peer) = listener.accept().await?;
 
         // The address the client originally dialed. In TPROXY mode this is the
         // accepted socket's local address; `SO_ORIGINAL_DST` also covers the
@@ -96,12 +96,21 @@ async fn handle_tcp(
             }
         };
 
-        // The loopback guard: proxying a connection back into this very
-        // listener would loop forever.
-        if destination.ip().is_loopback() || destination.ip().is_unspecified() {
+        // The self-connection guard: proxying a connection back into this very
+        // listener would loop forever. Besides loopback/unspecified
+        // destinations, reject a destination that is one of the listener's own
+        // bound addresses (a loopback check only covers 127.0.0.0/8, a client
+        // can also reach the listener's non-loopback address) and a destination
+        // equal to the connection's source address (the client dialing itself).
+        if destination.ip().is_loopback()
+            || destination.ip().is_unspecified()
+            || destination == local_addr
+            || destination == addr
+            || destination == peer
+        {
             debug!(
-                "tproxy: dropping connection with non-routable original destination {}",
-                destination
+                "tproxy: dropping self-connection (destination {}, listener {}, peer {})",
+                destination, local_addr, peer
             );
             continue;
         }

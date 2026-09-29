@@ -314,16 +314,14 @@ impl OutboundManager {
                     let settings =
                         config::VlessOutboundSettings::parse_from_bytes(&outbound.settings)
                             .map_err(|e| anyhow!("invalid [{}] outbound settings: {}", &tag, e))?;
-                    let stream = Arc::new(vless::outbound::StreamHandler {
-                        address: settings.address.clone(),
-                        port: settings.port as u16,
-                        uuid: settings.uuid.clone(),
-                    });
-                    let datagram = Arc::new(vless::outbound::DatagramHandler {
-                        address: settings.address.clone(),
-                        port: settings.port as u16,
-                        uuid: settings.uuid.clone(),
-                    });
+                    let stream = Arc::new(vless::outbound::StreamHandler::new(
+                        &settings,
+                        dns_client.clone(),
+                    )?);
+                    let datagram = Arc::new(vless::outbound::DatagramHandler::new(
+                        &settings,
+                        dns_client.clone(),
+                    )?);
                     HandlerBuilder::default()
                         .tag(tag.clone())
                         .stream_handler(stream)
@@ -412,9 +410,10 @@ impl OutboundManager {
                     let settings =
                         config::XhttpOutboundSettings::parse_from_bytes(&outbound.settings)
                             .map_err(|e| anyhow!("invalid [{}] outbound settings: {}", &tag, e))?;
-                    let stream = Arc::new(
-                        xhttp::outbound::StreamHandler::new(&settings, dns_client.clone())?,
-                    );
+                    let stream = Arc::new(xhttp::outbound::StreamHandler::new(
+                        &settings,
+                        dns_client.clone(),
+                    )?);
                     HandlerBuilder::default()
                         .tag(tag.clone())
                         .stream_handler(stream)
@@ -426,8 +425,7 @@ impl OutboundManager {
                         config::FinalmaskOutboundSettings::parse_from_bytes(&outbound.settings)
                             .map_err(|e| anyhow!("invalid [{}] outbound settings: {}", &tag, e))?;
                     let stream = Arc::new(finalmask::outbound::StreamHandler::new(&settings)?);
-                    let datagram =
-                        Arc::new(finalmask::outbound::DatagramHandler::new(&settings)?);
+                    let datagram = Arc::new(finalmask::outbound::DatagramHandler::new(&settings)?);
                     HandlerBuilder::default()
                         .tag(tag.clone())
                         .stream_handler(stream)

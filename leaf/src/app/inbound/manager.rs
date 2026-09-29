@@ -5,6 +5,7 @@ use anyhow::{anyhow, Result};
 use protobuf::Message;
 
 use crate::app::dispatcher::Dispatcher;
+use crate::app::fake_dns::FakeDns;
 use crate::app::nat_manager::NatManager;
 use crate::config;
 use crate::proxy;
@@ -70,7 +71,11 @@ impl InboundManager {
         inbounds: &[config::Inbound],
         dispatcher: Arc<Dispatcher>,
         nat_manager: Arc<NatManager>,
+        fake_dns: Arc<FakeDns>,
     ) -> Result<Self> {
+        #[cfg(not(feature = "inbound-tun"))]
+        let _ = fake_dns;
+
         let mut handlers: HashMap<String, AnyInboundHandler> = HashMap::new();
 
         for inbound in inbounds.iter() {
@@ -176,11 +181,10 @@ impl InboundManager {
                 "tls" => {
                     let settings = config::TlsInboundSettings::parse_from_bytes(&inbound.settings)
                         .map_err(|e| anyhow!("invalid [{}] inbound settings: {}", &tag, e))?;
-                    let stream = Arc::new(
-                        tls::inbound::StreamHandler::new(&settings).map_err(|e| {
+                    let stream =
+                        Arc::new(tls::inbound::StreamHandler::new(&settings).map_err(|e| {
                             anyhow!("invalid [{}] inbound tls capability: {}", &tag, e)
-                        })?,
-                    );
+                        })?);
                     let handler = Arc::new(proxy::inbound::Handler::new(
                         tag.clone(),
                         Some(stream),
@@ -190,13 +194,13 @@ impl InboundManager {
                 }
                 #[cfg(feature = "inbound-vless")]
                 "vless" => {
-                    let settings = config::VlessInboundSettings::parse_from_bytes(&inbound.settings)
-                        .map_err(|e| anyhow!("invalid [{}] inbound settings: {}", &tag, e))?;
-                    let stream = Arc::new(
-                        vless::inbound::StreamHandler::new(&settings).map_err(|e| {
+                    let settings =
+                        config::VlessInboundSettings::parse_from_bytes(&inbound.settings)
+                            .map_err(|e| anyhow!("invalid [{}] inbound settings: {}", &tag, e))?;
+                    let stream =
+                        Arc::new(vless::inbound::StreamHandler::new(&settings).map_err(|e| {
                             anyhow!("invalid [{}] inbound vless capability: {}", &tag, e)
-                        })?,
-                    );
+                        })?);
                     let datagram = Arc::new(
                         vless::inbound::DatagramHandler::new(&settings).map_err(|e| {
                             anyhow!("invalid [{}] inbound vless capability: {}", &tag, e)
@@ -228,13 +232,13 @@ impl InboundManager {
                 }
                 #[cfg(feature = "inbound-xhttp")]
                 "xhttp" => {
-                    let settings = config::XhttpInboundSettings::parse_from_bytes(&inbound.settings)
-                        .map_err(|e| anyhow!("invalid [{}] inbound settings: {}", &tag, e))?;
-                    let stream = Arc::new(
-                        xhttp::inbound::StreamHandler::new(&settings).map_err(|e| {
+                    let settings =
+                        config::XhttpInboundSettings::parse_from_bytes(&inbound.settings)
+                            .map_err(|e| anyhow!("invalid [{}] inbound settings: {}", &tag, e))?;
+                    let stream =
+                        Arc::new(xhttp::inbound::StreamHandler::new(&settings).map_err(|e| {
                             anyhow!("invalid [{}] inbound xhttp capability: {}", &tag, e)
-                        })?,
-                    );
+                        })?);
                     let datagram = Arc::new(
                         xhttp::inbound::DatagramHandler::new(&settings).map_err(|e| {
                             anyhow!("invalid [{}] inbound xhttp capability: {}", &tag, e)
@@ -252,16 +256,14 @@ impl InboundManager {
                     let settings =
                         config::FinalmaskInboundSettings::parse_from_bytes(&inbound.settings)
                             .map_err(|e| anyhow!("invalid [{}] inbound settings: {}", &tag, e))?;
-                    let stream = Arc::new(
-                        finalmask::inbound::StreamHandler::new(&settings).map_err(|e| {
-                            anyhow!("invalid [{}] inbound finalmask capability: {}", &tag, e)
-                        })?,
-                    );
-                    let datagram = Arc::new(
-                        finalmask::inbound::DatagramHandler::new(&settings).map_err(|e| {
-                            anyhow!("invalid [{}] inbound finalmask capability: {}", &tag, e)
-                        })?,
-                    );
+                    let stream =
+                        Arc::new(finalmask::inbound::StreamHandler::new(&settings).map_err(
+                            |e| anyhow!("invalid [{}] inbound finalmask capability: {}", &tag, e),
+                        )?);
+                    let datagram =
+                        Arc::new(finalmask::inbound::DatagramHandler::new(&settings).map_err(
+                            |e| anyhow!("invalid [{}] inbound finalmask capability: {}", &tag, e),
+                        )?);
                     let handler = Arc::new(proxy::inbound::Handler::new(
                         tag.clone(),
                         Some(stream),
@@ -274,11 +276,10 @@ impl InboundManager {
                     let settings =
                         config::Hysteria2InboundSettings::parse_from_bytes(&inbound.settings)
                             .map_err(|e| anyhow!("invalid [{}] inbound settings: {}", &tag, e))?;
-                    let datagram = Arc::new(
-                        hysteria2::inbound::DatagramHandler::new(&settings).map_err(|e| {
-                            anyhow!("invalid [{}] inbound hysteria2 capability: {}", &tag, e)
-                        })?,
-                    );
+                    let datagram =
+                        Arc::new(hysteria2::inbound::DatagramHandler::new(&settings).map_err(
+                            |e| anyhow!("invalid [{}] inbound hysteria2 capability: {}", &tag, e),
+                        )?);
                     let handler = Arc::new(proxy::inbound::Handler::new(
                         tag.clone(),
                         None,
@@ -379,6 +380,7 @@ impl InboundManager {
                         inbound: inbound.clone(),
                         dispatcher: dispatcher.clone(),
                         nat_manager: nat_manager.clone(),
+                        fake_dns: fake_dns.clone(),
                     };
                     tun_listener.replace(listener);
                     let settings =

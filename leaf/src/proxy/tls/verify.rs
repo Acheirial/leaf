@@ -127,7 +127,11 @@ impl ServerCertVerifier for PinnedVerifier {
     ) -> Result<ServerCertVerified, Error> {
         if !self.pins.is_empty() {
             let leaf = Sha256::digest(end_entity.as_ref());
-            if self.pins.iter().any(|pin| pin.as_slice() == leaf.as_slice()) {
+            if self
+                .pins
+                .iter()
+                .any(|pin| pin.as_slice() == leaf.as_slice())
+            {
                 return Ok(ServerCertVerified::assertion());
             }
         }

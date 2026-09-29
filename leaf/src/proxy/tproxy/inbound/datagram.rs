@@ -142,10 +142,16 @@ impl InboundDatagramRecvHalf for DatagramRecvHalf {
         buf: &mut [u8],
     ) -> ProxyResult<(usize, DatagramSource, SocksAddr)> {
         let socket = self.0.clone();
+        // Await readability and retry on `WouldBlock` instead of failing: the
+        // synchronous `try_io` surfaces the first `WouldBlock` (whether from an
+        // empty readiness flag or from the non-blocking `recvmsg`) as an error,
+        // which the datagram dispatcher maps to `DatagramFatal` and uses to end
+        // its receive loop — the runner would stop on its first idle poll.
         let (n, source, original_dst) = socket
-            .try_io(Interest::READABLE, || {
+            .async_io(Interest::READABLE, || {
                 crate::proxy::tproxy::sys::recv_from_original_dst(&*socket, buf)
             })
+            .await
             .map_err(|e| ProxyError::DatagramFatal(e.into()))?;
         let key = datagram_key(source, original_dst);
         Ok((
@@ -156,11 +162,25 @@ impl InboundDatagramRecvHalf for DatagramRecvHalf {
     }
 }
 
+/// A spoofed reply socket together with the instant it was last used.
+struct SpoofEntry {
+    socket: tokio::net::UdpSocket,
+    last_used: std::time::Instant,
+}
+
 pub struct DatagramSendHalf {
     base: Arc<tokio::net::UdpSocket>,
     /// One socket per `(client, original destination)` pair, bound to the
     /// original destination so replies appear to come from it.
-    spoof: HashMap<(SocketAddr, SocketAddr), tokio::net::UdpSocket>,
+    ///
+    /// Eviction: each entry records when it was last used and is dropped (its
+    /// file descriptor closed) once idle for longer than the UDP session
+    /// timeout `crate::option::UDP_SESSION_TIMEOUT`, matching the NAT session
+    /// lifetime. The sweep runs opportunistically when a *new* pair is inserted,
+    /// via `HashMap::retain` (which allocates nothing), so traffic from many
+    /// distinct pairs cannot grow the map or the process's fd table without
+    /// bound.
+    spoof: HashMap<(SocketAddr, SocketAddr), SpoofEntry>,
 }
 
 #[async_trait]
@@ -181,22 +201,38 @@ impl InboundDatagramSendHalf for DatagramSendHalf {
             return self.base.send_to(buf, dst_addr).await;
         }
         let key = (*dst_addr, original_dst);
-        if let std::collections::hash_map::Entry::Vacant(entry) = self.spoof.entry(key) {
-            match crate::proxy::tproxy::sys::bind_spoofed_udp(&original_dst) {
-                Ok(socket) => {
-                    entry.insert(socket);
-                }
-                Err(e) => {
-                    debug!(
-                        "tproxy: failed to bind spoofed udp socket for {}: {}",
-                        original_dst, e
-                    );
-                    return self.base.send_to(buf, dst_addr).await;
-                }
+        let now = std::time::Instant::now();
+        // Existing pair: reuse its spoofed socket and refresh last-used.
+        if let Some(entry) = self.spoof.get_mut(&key) {
+            entry.last_used = now;
+            return entry.socket.send_to(buf, dst_addr).await;
+        }
+        // New pair: opportunistically evict entries whose NAT session has
+        // already expired before inserting, keeping the map (and its fds)
+        // bounded. `retain` allocates nothing.
+        let timeout = std::time::Duration::from_secs(*crate::option::UDP_SESSION_TIMEOUT);
+        self.spoof
+            .retain(|_, entry| now.duration_since(entry.last_used) < timeout);
+        match crate::proxy::tproxy::sys::bind_spoofed_udp(&original_dst) {
+            Ok(socket) => {
+                self.spoof.insert(
+                    key,
+                    SpoofEntry {
+                        socket,
+                        last_used: now,
+                    },
+                );
+            }
+            Err(e) => {
+                debug!(
+                    "tproxy: failed to bind spoofed udp socket for {}: {}",
+                    original_dst, e
+                );
+                return self.base.send_to(buf, dst_addr).await;
             }
         }
-        let socket = self.spoof.get(&key).expect("spoofed socket inserted above");
-        socket.send_to(buf, dst_addr).await
+        let entry = self.spoof.get(&key).expect("spoofed socket inserted above");
+        entry.socket.send_to(buf, dst_addr).await
     }
 
     async fn close(&mut self) -> io::Result<()> {

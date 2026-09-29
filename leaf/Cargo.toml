@@ -140,16 +140,25 @@ outbound-failover = ["lru_time_cache"]
 outbound-static= []
 outbound-tryall = []
 outbound-chain = []
-outbound-vless = ["hex"]
+outbound-vless = [
+    "hex",
+    "base64",
+    "ml-kem",
+    "x25519-dalek",
+    "blake3",
+    "chacha20poly1305",
+    "aes-gcm",
+    "aes",
+]
 outbound-reality = ["reality", "reality-rustls", "webpki-roots", "rustls-pemfile", "hex", "base64"]
 outbound-amux= ["tokio-util"]
 outbound-quic = ["rustls"]
 outbound-mptp = []
 outbound-select = ["directories", "axum/query"]
 outbound-vmess = ["lz_fnv", "cfb-mode", "hmac", "sha2", "aes", "aes-gcm", "sha3", "digest", "md-5", "tokio-util", "byteorder", "crc32fast"]
-outbound-xhttp = ["http", "url"]
+outbound-xhttp = ["http", "url", "serde_json"]
 outbound-finalmask = ["serde_json"]
-outbound-hysteria2 = ["quinn", "rustls", "h3", "h3-quinn", "blake2"]
+outbound-hysteria2 = ["quinn", "rustls", "h3", "h3-quinn", "blake2", "http", "webpki-roots", "rustls-pemfile"]
 
 # Inbounds
 inbound-mptp = []
@@ -164,11 +173,19 @@ inbound-tls = []
 inbound-chain = []
 inbound-cat = ["tokio/io-std"]
 inbound-tproxy = []
-inbound-vless = []
-inbound-reality = ["reality", "reality-rustls", "rustls-pemfile", "hex", "base64"]
-inbound-xhttp = ["http", "url"]
+inbound-vless = [
+    "base64",
+    "ml-kem",
+    "x25519-dalek",
+    "blake3",
+    "chacha20poly1305",
+    "aes-gcm",
+    "aes",
+]
+inbound-reality = ["reality", "reality-rustls", "rustls-pemfile", "hex", "base64", "x25519-dalek", "hkdf", "sha2", "aes-gcm", "hmac"]
+inbound-xhttp = ["http", "url", "serde_json"]
 inbound-finalmask = ["serde_json"]
-inbound-hysteria2 = ["quinn", "rustls", "h3", "h3-quinn", "blake2"]
+inbound-hysteria2 = ["quinn", "rustls", "h3", "h3-quinn", "blake2", "http", "rustls-pemfile"]
 
 plugin = ["async-ffi", "libloading"]
 api = ["axum"]
@@ -274,6 +291,11 @@ digest = { version = "0.10", optional = true }
 byteorder = { version = "1", optional = true }
 crc32fast = { version = "1", optional = true }
 
+# VLESS encryption (mlkem768x25519plus)
+blake3 = { version = "1.8", optional = true }
+ml-kem = { version = "0.3", optional = true }
+chacha20poly1305 = { version = "0.10", optional = true }
+
 # Failover
 lru_time_cache = { version = "0.11", optional = true }
 
@@ -292,6 +314,9 @@ blake2 = { version = "0.10", optional = true }
 # Reality
 reality = { git = "https://github.com/Acheirial/reality-rs.git", rev = "8824b070d4a7b2b33d7553c430d1d3745f858ec2", optional = true }
 reality-rustls = { package = "rustls", git = "https://github.com/Acheirial/reality-rustls.git", rev = "a23b7ed094ae3998e163878821fe864a6efc0469", optional = true, default-features = false, features = ["ring", "std", "tls12", "logging"] }
+# X25519 scalar multiplication for the REALITY inbound server auth (the patched
+# rustls exposes no static-key ECDH for the server side).
+x25519-dalek = { version = "2", optional = true }
 
 # API
 axum = { version = "0.7", default-features = false, features = ["http1", "tokio", "json"], optional = true }

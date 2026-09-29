@@ -173,6 +173,12 @@ pub struct ChainInboundSettings {
 #[serde(deny_unknown_fields)]
 pub struct MptpInboundSettings {}
 
+/// TPROXY takes no options: the listener address/port come from the inbound
+/// entry itself. Any field in the settings object is unknown and rejected.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct TproxyInboundSettings {}
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TunInboundSettings {
     pub auto: Option<bool>,
@@ -406,7 +412,10 @@ pub struct TlsOutboundSettings {
     pub cipher_suites: Option<String>,
     #[serde(rename = "curvePreferences", alias = "curve_preferences")]
     pub curve_preferences: Option<Vec<String>>,
-    #[serde(rename = "enableSessionResumption", alias = "enable_session_resumption")]
+    #[serde(
+        rename = "enableSessionResumption",
+        alias = "enable_session_resumption"
+    )]
     pub enable_session_resumption: Option<bool>,
     #[serde(rename = "disableSystemRoot", alias = "disable_system_root")]
     pub disable_system_root: Option<bool>,
@@ -595,6 +604,10 @@ pub enum InboundSettings {
     Mptp {
         #[serde(default)]
         settings: Option<MptpInboundSettings>,
+    },
+    Tproxy {
+        #[serde(default)]
+        settings: Option<TproxyInboundSettings>,
     },
     Tun {
         #[serde(default)]
@@ -1312,7 +1325,8 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                         if let Some(down_mbps) = ext_settings.down_mbps {
                             settings.down_mbps = Some(down_mbps);
                         }
-                        if let Some(ignore_client_bandwidth) = ext_settings.ignore_client_bandwidth {
+                        if let Some(ignore_client_bandwidth) = ext_settings.ignore_client_bandwidth
+                        {
                             settings.ignore_client_bandwidth = Some(ignore_client_bandwidth);
                         }
                         if let Some(certificate) = &ext_settings.certificate {
@@ -1496,6 +1510,21 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                     inbound.protocol = "mptp".to_string();
                     if let Some(_ext_settings) = ext_settings {
                         let settings = internal::MptpInboundSettings::new();
+                        let settings = settings
+                            .write_to_bytes()
+                            .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;
+                        inbound.settings = settings;
+                    }
+                    inbounds.push(inbound);
+                }
+                InboundSettings::Tproxy {
+                    settings: ext_settings,
+                } => {
+                    inbound.protocol = "tproxy".to_string();
+                    // TPROXY takes no options; `deny_unknown_fields` on
+                    // `TproxyInboundSettings` already rejects any that are set.
+                    if let Some(_ext_settings) = ext_settings {
+                        let settings = internal::TproxyInboundSettings::new();
                         let settings = settings
                             .write_to_bytes()
                             .map_err(|e| anyhow::anyhow!("failed to serialize settings: {}", e))?;

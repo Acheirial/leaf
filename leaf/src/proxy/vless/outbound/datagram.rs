@@ -1,17 +1,44 @@
 use std::collections::VecDeque;
 use std::io;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
-use uuid::Uuid;
 
-use super::super::datagram::{build_vless_udp_header, VlessUdpParser};
+use super::super::datagram::{encode_packet, encode_udp_header, PacketDecoder};
+use super::super::encoding::Addons;
+use super::super::encryption::ClientInstance;
+use crate::app::SyncDnsClient;
+use crate::config;
 use crate::{proxy::*, session::*};
 
 pub struct Handler {
-    pub address: String,
-    pub port: u16,
-    pub uuid: String,
+    address: String,
+    port: u16,
+    uuid: [u8; 16],
+    encryption: Option<Arc<ClientInstance>>,
+}
+
+impl Handler {
+    pub fn new(
+        settings: &config::VlessOutboundSettings,
+        _dns_client: SyncDnsClient,
+    ) -> anyhow::Result<Self> {
+        let uuid = uuid::Uuid::parse_str(&settings.uuid)
+            .map_err(|e| anyhow::anyhow!("invalid vless uuid {}: {}", settings.uuid, e))?;
+        let encryption = match settings.encryption.as_deref() {
+            Some(e) if !e.is_empty() && e != "none" => {
+                Some(Arc::new(ClientInstance::from_encryption(e)?))
+            }
+            _ => None,
+        };
+        Ok(Handler {
+            address: settings.address.clone(),
+            port: settings.port as u16,
+            uuid: *uuid.as_bytes(),
+            encryption,
+        })
+    }
 }
 
 #[async_trait]
@@ -30,30 +57,16 @@ impl OutboundDatagramHandler for Handler {
         transport: Option<AnyOutboundTransport>,
     ) -> io::Result<AnyOutboundDatagram> {
         tracing::trace!("handling outbound datagram");
-        let u = Uuid::parse_str(&self.uuid)
-            .map_err(|e| io::Error::other(format!("parse uuid failed: {}", e)))?;
-        let uuid_bytes = *u.as_bytes();
-
-        let addr_type = match sess.destination.ip() {
-            Some(ip) => {
-                if ip.is_ipv4() {
-                    1
-                } else {
-                    3
-                }
-            }
-            None => 2,
+        let mut stream = match transport {
+            Some(OutboundTransport::Stream(stream)) => stream,
+            _ => return Err(io::Error::other("invalid input")),
         };
-        let host = sess.destination.host();
-        let port = sess.destination.port();
 
-        let header = build_vless_udp_header(&uuid_bytes, &host, port, addr_type);
+        if let Some(encryption) = &self.encryption {
+            stream = encryption.handshake(stream).await?;
+        }
 
-        let stream = if let Some(OutboundTransport::Stream(stream)) = transport {
-            stream
-        } else {
-            return Err(io::Error::other("invalid input"));
-        };
+        let header = encode_udp_header(&self.uuid, &sess.destination, &Addons::default());
 
         Ok(Box::new(Datagram {
             stream,
@@ -83,7 +96,8 @@ where
         (
             Box::new(DatagramRecvHalf {
                 reader: r,
-                parser: VlessUdpParser::new(),
+                decoder: PacketDecoder::new(),
+                header: ResponseHeader::new(),
                 buffer: VecDeque::new(),
                 destination: self.destination,
             }),
@@ -95,9 +109,28 @@ where
     }
 }
 
+/// Consumes the server's response header before the datagrams begin. It is a
+/// `[version:1][addons len:1][addons]` tuple with normally empty addons.
+struct ResponseHeader {
+    parsed: bool,
+    buffer: Vec<u8>,
+    needed: Option<usize>,
+}
+
+impl ResponseHeader {
+    fn new() -> Self {
+        ResponseHeader {
+            parsed: false,
+            buffer: Vec::new(),
+            needed: None,
+        }
+    }
+}
+
 pub struct DatagramRecvHalf<T> {
     reader: ReadHalf<T>,
-    parser: VlessUdpParser,
+    decoder: PacketDecoder,
+    header: ResponseHeader,
     buffer: VecDeque<Vec<u8>>,
     destination: SocksAddr,
 }
@@ -118,12 +151,34 @@ where
             let mut io_buf = [0u8; 8192];
             let n = self.reader.read(&mut io_buf).await?;
             if n == 0 {
-                warn!("VLESS UDP Recv EOF from server");
                 return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "eof"));
             }
-            let packets = self.parser.parse(&io_buf[..n]);
-            for p in packets {
-                self.buffer.push_back(p);
+
+            let chunk = &io_buf[..n];
+            if !self.header.parsed {
+                self.header.buffer.extend_from_slice(chunk);
+                if self.header.needed.is_none() && self.header.buffer.len() >= 2 {
+                    self.header.needed = Some(2 + self.header.buffer[1] as usize);
+                }
+                if self
+                    .header
+                    .needed
+                    .map_or(false, |needed| self.header.buffer.len() >= needed)
+                {
+                    let needed = self.header.needed.unwrap();
+                    self.header.buffer.drain(..needed);
+                    self.header.parsed = true;
+                    let rest = std::mem::take(&mut self.header.buffer);
+                    self.decoder.push(&rest);
+                } else {
+                    continue;
+                }
+            } else {
+                self.decoder.push(chunk);
+            }
+
+            while let Some(packet) = self.decoder.next_packet() {
+                self.buffer.push_back(packet);
             }
         }
     }
@@ -134,27 +189,18 @@ pub struct DatagramSendHalf<T> {
     header: Option<Vec<u8>>,
 }
 
-use tracing::{debug, warn};
-
 #[async_trait]
 impl<T> OutboundDatagramSendHalf for DatagramSendHalf<T>
 where
     T: AsyncRead + AsyncWrite + Send + Sync,
 {
     async fn send_to(&mut self, buf: &[u8], _target: &SocksAddr) -> io::Result<usize> {
-        let payload_len = buf.len() as u16;
-        let header_len = self.header.as_ref().map(|h| h.len()).unwrap_or(0);
-        let mut write_buf = Vec::with_capacity(2 + buf.len() + header_len);
-
+        let mut frame = Vec::with_capacity(buf.len() + 2);
         if let Some(header) = self.header.take() {
-            debug!("VLESS UDP Sending Header: {:02x?}", header);
-            write_buf.extend_from_slice(&header);
+            frame.extend_from_slice(&header);
         }
-
-        write_buf.extend_from_slice(&payload_len.to_be_bytes());
-        write_buf.extend_from_slice(buf);
-
-        self.writer.write_all(&write_buf).await?;
+        frame.extend_from_slice(&encode_packet(buf));
+        self.writer.write_all(&frame).await?;
         self.writer.flush().await?;
         Ok(buf.len())
     }

@@ -141,3 +141,40 @@ fn test_malformed_yaml_errors() {
     let result = crate::config::yaml::from_string(malformed);
     assert!(result.is_err(), "malformed yaml should not parse");
 }
+
+#[test]
+fn test_tproxy_inbound_reaches_manager() {
+    let yaml = r#"
+inbounds:
+  - tag: tproxy_in
+    address: 0.0.0.0
+    port: 12345
+    protocol: tproxy
+"#;
+
+    let config = crate::config::yaml::from_string(yaml).expect("yaml config should parse");
+    assert_eq!(config.inbounds.len(), 1);
+    assert_eq!(config.inbounds[0].tag, "tproxy_in");
+    assert_eq!(config.inbounds[0].protocol, "tproxy");
+    assert_eq!(config.inbounds[0].address, "0.0.0.0");
+    assert_eq!(config.inbounds[0].port, 12345);
+    assert!(
+        config.inbounds[0].settings.is_empty(),
+        "tproxy takes no settings"
+    );
+}
+
+#[test]
+fn test_tproxy_inbound_rejects_unknown_settings() {
+    let yaml = r#"
+inbounds:
+  - tag: tproxy_in
+    address: 0.0.0.0
+    port: 12345
+    protocol: tproxy
+    settings:
+      unexpected: true
+"#;
+
+    assert!(crate::config::yaml::from_string(yaml).is_err());
+}

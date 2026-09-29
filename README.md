@@ -13,6 +13,18 @@
 A versatile and efficient proxy framework.
 </p>
 
+## Documentation
+
+The documentation site is an [mdBook](https://rust-lang.github.io/mdBook/)
+living in [`docs/`](docs/) and is published to GitHub Pages at
+<https://acheirial.github.io/leaf/>. It covers configuration, the supported
+protocols and transports, routing, DNS, TLS and the API.
+
+- [Introduction](docs/src/introduction.md)
+- [Configuration](docs/src/configuration.md)
+- [YAML configuration guide](docs/src/yaml_config.md)
+- [MPTP architecture](docs/src/mptp_architecture.md) and [usage](docs/src/mptp_usage.md)
+
 ## Supported Protocols
 
 ### Proxy Protocols
@@ -36,7 +48,7 @@ A versatile and efficient proxy framework.
 | AMux | ✅ | ✅ | Leaf specific multiplexing |
 | Obfs | ❌ | ✅ | Simple obfuscation |
 | Reality | ❌ | ✅ | Xray Reality |
-| MPTP | ✅ | ✅ | Multi-path Transport Protocol (Aggregation) ([Architecture](docs/mptp_architecture.md), [Usage](docs/mptp_usage.md)) |
+| MPTP | ✅ | ✅ | Multi-path Transport Protocol (Aggregation) ([Architecture](docs/src/mptp_architecture.md), [Usage](docs/src/mptp_usage.md)) |
 
 ### Traffic Control
 
@@ -62,7 +74,7 @@ Leaf selects the configuration format by file extension:
 | `.json` | JSON |
 | `.conf` | clash-style `.conf` |
 
-YAML is the preferred format. See the [YAML configuration guide](docs/yaml_config.md)
+YAML is the preferred format. See the [YAML configuration guide](docs/src/yaml_config.md)
 for a complete, runnable example covering `inbounds`, `outbounds`, `dns`, `router`
 and `log`. JSON and clash-style `.conf` configurations remain fully supported.
 

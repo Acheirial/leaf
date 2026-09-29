@@ -2389,6 +2389,1237 @@ impl ::protobuf::Message for HcInboundSettings {
     }
 }
 
+// @@protoc_insertion_point(message:VlessUser)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct VlessUser {
+    // message fields
+    // @@protoc_insertion_point(field:VlessUser.id)
+    pub id: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:VlessUser.flow)
+    pub flow: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:VlessUser.encryption)
+    pub encryption: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:VlessUser.level)
+    pub level: ::std::option::Option<::std::string::String>,
+    // special fields
+    // @@protoc_insertion_point(special_field:VlessUser.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a VlessUser {
+    fn default() -> &'a VlessUser {
+        <VlessUser as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl VlessUser {
+    pub fn new() -> VlessUser {
+        ::std::default::Default::default()
+    }
+}
+
+impl ::protobuf::Message for VlessUser {
+    const NAME: &'static str = "VlessUser";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.id = ::std::option::Option::Some(is.read_string()?);
+                },
+                18 => {
+                    self.flow = ::std::option::Option::Some(is.read_string()?);
+                },
+                26 => {
+                    self.encryption = ::std::option::Option::Some(is.read_string()?);
+                },
+                34 => {
+                    self.level = ::std::option::Option::Some(is.read_string()?);
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.id.as_ref() {
+            my_size += ::protobuf::rt::string_size(1, &v);
+        }
+        if let Some(v) = self.flow.as_ref() {
+            my_size += ::protobuf::rt::string_size(2, &v);
+        }
+        if let Some(v) = self.encryption.as_ref() {
+            my_size += ::protobuf::rt::string_size(3, &v);
+        }
+        if let Some(v) = self.level.as_ref() {
+            my_size += ::protobuf::rt::string_size(4, &v);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.id.as_ref() {
+            os.write_string(1, v)?;
+        }
+        if let Some(v) = self.flow.as_ref() {
+            os.write_string(2, v)?;
+        }
+        if let Some(v) = self.encryption.as_ref() {
+            os.write_string(3, v)?;
+        }
+        if let Some(v) = self.level.as_ref() {
+            os.write_string(4, v)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> VlessUser {
+        VlessUser::new()
+    }
+
+    fn clear(&mut self) {
+        self.id = ::std::option::Option::None;
+        self.flow = ::std::option::Option::None;
+        self.encryption = ::std::option::Option::None;
+        self.level = ::std::option::Option::None;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static VlessUser {
+        static instance: VlessUser = VlessUser {
+            id: ::std::option::Option::None,
+            flow: ::std::option::Option::None,
+            encryption: ::std::option::Option::None,
+            level: ::std::option::Option::None,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+// @@protoc_insertion_point(message:VlessFallback)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct VlessFallback {
+    // message fields
+    // @@protoc_insertion_point(field:VlessFallback.name)
+    pub name: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:VlessFallback.alpn)
+    pub alpn: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:VlessFallback.path)
+    pub path: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:VlessFallback.type)
+    pub type_: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:VlessFallback.dest)
+    pub dest: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:VlessFallback.xver)
+    pub xver: ::std::option::Option<u32>,
+    // special fields
+    // @@protoc_insertion_point(special_field:VlessFallback.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a VlessFallback {
+    fn default() -> &'a VlessFallback {
+        <VlessFallback as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl VlessFallback {
+    pub fn new() -> VlessFallback {
+        ::std::default::Default::default()
+    }
+}
+
+impl ::protobuf::Message for VlessFallback {
+    const NAME: &'static str = "VlessFallback";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.name = ::std::option::Option::Some(is.read_string()?);
+                },
+                18 => {
+                    self.alpn = ::std::option::Option::Some(is.read_string()?);
+                },
+                26 => {
+                    self.path = ::std::option::Option::Some(is.read_string()?);
+                },
+                34 => {
+                    self.type_ = ::std::option::Option::Some(is.read_string()?);
+                },
+                42 => {
+                    self.dest = ::std::option::Option::Some(is.read_string()?);
+                },
+                48 => {
+                    self.xver = ::std::option::Option::Some(is.read_uint32()?);
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.name.as_ref() {
+            my_size += ::protobuf::rt::string_size(1, &v);
+        }
+        if let Some(v) = self.alpn.as_ref() {
+            my_size += ::protobuf::rt::string_size(2, &v);
+        }
+        if let Some(v) = self.path.as_ref() {
+            my_size += ::protobuf::rt::string_size(3, &v);
+        }
+        if let Some(v) = self.type_.as_ref() {
+            my_size += ::protobuf::rt::string_size(4, &v);
+        }
+        if let Some(v) = self.dest.as_ref() {
+            my_size += ::protobuf::rt::string_size(5, &v);
+        }
+        if let Some(v) = self.xver {
+            my_size += ::protobuf::rt::uint32_size(6, v);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.name.as_ref() {
+            os.write_string(1, v)?;
+        }
+        if let Some(v) = self.alpn.as_ref() {
+            os.write_string(2, v)?;
+        }
+        if let Some(v) = self.path.as_ref() {
+            os.write_string(3, v)?;
+        }
+        if let Some(v) = self.type_.as_ref() {
+            os.write_string(4, v)?;
+        }
+        if let Some(v) = self.dest.as_ref() {
+            os.write_string(5, v)?;
+        }
+        if let Some(v) = self.xver {
+            os.write_uint32(6, v)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> VlessFallback {
+        VlessFallback::new()
+    }
+
+    fn clear(&mut self) {
+        self.name = ::std::option::Option::None;
+        self.alpn = ::std::option::Option::None;
+        self.path = ::std::option::Option::None;
+        self.type_ = ::std::option::Option::None;
+        self.dest = ::std::option::Option::None;
+        self.xver = ::std::option::Option::None;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static VlessFallback {
+        static instance: VlessFallback = VlessFallback {
+            name: ::std::option::Option::None,
+            alpn: ::std::option::Option::None,
+            path: ::std::option::Option::None,
+            type_: ::std::option::Option::None,
+            dest: ::std::option::Option::None,
+            xver: ::std::option::Option::None,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+// @@protoc_insertion_point(message:VlessInboundSettings)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct VlessInboundSettings {
+    // message fields
+    // @@protoc_insertion_point(field:VlessInboundSettings.users)
+    pub users: ::std::vec::Vec<::std::string::String>,
+    // @@protoc_insertion_point(field:VlessInboundSettings.user_objects)
+    pub user_objects: ::std::vec::Vec<VlessUser>,
+    // @@protoc_insertion_point(field:VlessInboundSettings.decryption)
+    pub decryption: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:VlessInboundSettings.fallbacks)
+    pub fallbacks: ::std::vec::Vec<VlessFallback>,
+    // special fields
+    // @@protoc_insertion_point(special_field:VlessInboundSettings.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a VlessInboundSettings {
+    fn default() -> &'a VlessInboundSettings {
+        <VlessInboundSettings as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl VlessInboundSettings {
+    pub fn new() -> VlessInboundSettings {
+        ::std::default::Default::default()
+    }
+}
+
+impl ::protobuf::Message for VlessInboundSettings {
+    const NAME: &'static str = "VlessInboundSettings";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.users.push(is.read_string()?);
+                },
+                18 => {
+                    self.user_objects.push(is.read_message()?);
+                },
+                26 => {
+                    self.decryption = ::std::option::Option::Some(is.read_string()?);
+                },
+                34 => {
+                    self.fallbacks.push(is.read_message()?);
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        for value in &self.users {
+            my_size += ::protobuf::rt::string_size(1, &value);
+        };
+        for value in &self.user_objects {
+            let len = value.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        };
+        if let Some(v) = self.decryption.as_ref() {
+            my_size += ::protobuf::rt::string_size(3, &v);
+        }
+        for value in &self.fallbacks {
+            let len = value.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        };
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        for v in &self.users {
+            os.write_string(1, &v)?;
+        };
+        for v in &self.user_objects {
+            ::protobuf::rt::write_message_field_with_cached_size(2, v, os)?;
+        };
+        if let Some(v) = self.decryption.as_ref() {
+            os.write_string(3, v)?;
+        }
+        for v in &self.fallbacks {
+            ::protobuf::rt::write_message_field_with_cached_size(4, v, os)?;
+        };
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> VlessInboundSettings {
+        VlessInboundSettings::new()
+    }
+
+    fn clear(&mut self) {
+        self.users.clear();
+        self.user_objects.clear();
+        self.decryption = ::std::option::Option::None;
+        self.fallbacks.clear();
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static VlessInboundSettings {
+        static instance: VlessInboundSettings = VlessInboundSettings {
+            users: ::std::vec::Vec::new(),
+            user_objects: ::std::vec::Vec::new(),
+            decryption: ::std::option::Option::None,
+            fallbacks: ::std::vec::Vec::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+// @@protoc_insertion_point(message:RealityInboundSettings)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct RealityInboundSettings {
+    // message fields
+    // @@protoc_insertion_point(field:RealityInboundSettings.dest)
+    pub dest: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:RealityInboundSettings.server_names)
+    pub server_names: ::std::vec::Vec<::std::string::String>,
+    // @@protoc_insertion_point(field:RealityInboundSettings.private_key)
+    pub private_key: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:RealityInboundSettings.short_ids)
+    pub short_ids: ::std::vec::Vec<::std::string::String>,
+    // @@protoc_insertion_point(field:RealityInboundSettings.show)
+    pub show: ::std::option::Option<bool>,
+    // @@protoc_insertion_point(field:RealityInboundSettings.xver)
+    pub xver: ::std::option::Option<u32>,
+    // @@protoc_insertion_point(field:RealityInboundSettings.target)
+    pub target: ::std::vec::Vec<::std::string::String>,
+    // @@protoc_insertion_point(field:RealityInboundSettings.max_time_diff_ms)
+    pub max_time_diff_ms: ::std::option::Option<u32>,
+    // special fields
+    // @@protoc_insertion_point(special_field:RealityInboundSettings.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a RealityInboundSettings {
+    fn default() -> &'a RealityInboundSettings {
+        <RealityInboundSettings as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl RealityInboundSettings {
+    pub fn new() -> RealityInboundSettings {
+        ::std::default::Default::default()
+    }
+}
+
+impl ::protobuf::Message for RealityInboundSettings {
+    const NAME: &'static str = "RealityInboundSettings";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.dest = ::std::option::Option::Some(is.read_string()?);
+                },
+                18 => {
+                    self.server_names.push(is.read_string()?);
+                },
+                26 => {
+                    self.private_key = ::std::option::Option::Some(is.read_string()?);
+                },
+                34 => {
+                    self.short_ids.push(is.read_string()?);
+                },
+                40 => {
+                    self.show = ::std::option::Option::Some(is.read_bool()?);
+                },
+                48 => {
+                    self.xver = ::std::option::Option::Some(is.read_uint32()?);
+                },
+                58 => {
+                    self.target.push(is.read_string()?);
+                },
+                64 => {
+                    self.max_time_diff_ms = ::std::option::Option::Some(is.read_uint32()?);
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.dest.as_ref() {
+            my_size += ::protobuf::rt::string_size(1, &v);
+        }
+        for value in &self.server_names {
+            my_size += ::protobuf::rt::string_size(2, &value);
+        };
+        if let Some(v) = self.private_key.as_ref() {
+            my_size += ::protobuf::rt::string_size(3, &v);
+        }
+        for value in &self.short_ids {
+            my_size += ::protobuf::rt::string_size(4, &value);
+        };
+        if let Some(v) = self.show {
+            my_size += 1 + 1;
+        }
+        if let Some(v) = self.xver {
+            my_size += ::protobuf::rt::uint32_size(6, v);
+        }
+        for value in &self.target {
+            my_size += ::protobuf::rt::string_size(7, &value);
+        };
+        if let Some(v) = self.max_time_diff_ms {
+            my_size += ::protobuf::rt::uint32_size(8, v);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.dest.as_ref() {
+            os.write_string(1, v)?;
+        }
+        for v in &self.server_names {
+            os.write_string(2, &v)?;
+        };
+        if let Some(v) = self.private_key.as_ref() {
+            os.write_string(3, v)?;
+        }
+        for v in &self.short_ids {
+            os.write_string(4, &v)?;
+        };
+        if let Some(v) = self.show {
+            os.write_bool(5, v)?;
+        }
+        if let Some(v) = self.xver {
+            os.write_uint32(6, v)?;
+        }
+        for v in &self.target {
+            os.write_string(7, &v)?;
+        };
+        if let Some(v) = self.max_time_diff_ms {
+            os.write_uint32(8, v)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> RealityInboundSettings {
+        RealityInboundSettings::new()
+    }
+
+    fn clear(&mut self) {
+        self.dest = ::std::option::Option::None;
+        self.server_names.clear();
+        self.private_key = ::std::option::Option::None;
+        self.short_ids.clear();
+        self.show = ::std::option::Option::None;
+        self.xver = ::std::option::Option::None;
+        self.target.clear();
+        self.max_time_diff_ms = ::std::option::Option::None;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static RealityInboundSettings {
+        static instance: RealityInboundSettings = RealityInboundSettings {
+            dest: ::std::option::Option::None,
+            server_names: ::std::vec::Vec::new(),
+            private_key: ::std::option::Option::None,
+            short_ids: ::std::vec::Vec::new(),
+            show: ::std::option::Option::None,
+            xver: ::std::option::Option::None,
+            target: ::std::vec::Vec::new(),
+            max_time_diff_ms: ::std::option::Option::None,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+// @@protoc_insertion_point(message:XhttpInboundSettings)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct XhttpInboundSettings {
+    // message fields
+    // @@protoc_insertion_point(field:XhttpInboundSettings.host)
+    pub host: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:XhttpInboundSettings.path)
+    pub path: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:XhttpInboundSettings.mode)
+    pub mode: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:XhttpInboundSettings.extra)
+    pub extra: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:XhttpInboundSettings.download_settings)
+    pub download_settings: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:XhttpInboundSettings.max_upload_size)
+    pub max_upload_size: ::std::option::Option<u32>,
+    // special fields
+    // @@protoc_insertion_point(special_field:XhttpInboundSettings.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a XhttpInboundSettings {
+    fn default() -> &'a XhttpInboundSettings {
+        <XhttpInboundSettings as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl XhttpInboundSettings {
+    pub fn new() -> XhttpInboundSettings {
+        ::std::default::Default::default()
+    }
+}
+
+impl ::protobuf::Message for XhttpInboundSettings {
+    const NAME: &'static str = "XhttpInboundSettings";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.host = ::std::option::Option::Some(is.read_string()?);
+                },
+                18 => {
+                    self.path = ::std::option::Option::Some(is.read_string()?);
+                },
+                26 => {
+                    self.mode = ::std::option::Option::Some(is.read_string()?);
+                },
+                34 => {
+                    self.extra = ::std::option::Option::Some(is.read_string()?);
+                },
+                42 => {
+                    self.download_settings = ::std::option::Option::Some(is.read_string()?);
+                },
+                48 => {
+                    self.max_upload_size = ::std::option::Option::Some(is.read_uint32()?);
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.host.as_ref() {
+            my_size += ::protobuf::rt::string_size(1, &v);
+        }
+        if let Some(v) = self.path.as_ref() {
+            my_size += ::protobuf::rt::string_size(2, &v);
+        }
+        if let Some(v) = self.mode.as_ref() {
+            my_size += ::protobuf::rt::string_size(3, &v);
+        }
+        if let Some(v) = self.extra.as_ref() {
+            my_size += ::protobuf::rt::string_size(4, &v);
+        }
+        if let Some(v) = self.download_settings.as_ref() {
+            my_size += ::protobuf::rt::string_size(5, &v);
+        }
+        if let Some(v) = self.max_upload_size {
+            my_size += ::protobuf::rt::uint32_size(6, v);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.host.as_ref() {
+            os.write_string(1, v)?;
+        }
+        if let Some(v) = self.path.as_ref() {
+            os.write_string(2, v)?;
+        }
+        if let Some(v) = self.mode.as_ref() {
+            os.write_string(3, v)?;
+        }
+        if let Some(v) = self.extra.as_ref() {
+            os.write_string(4, v)?;
+        }
+        if let Some(v) = self.download_settings.as_ref() {
+            os.write_string(5, v)?;
+        }
+        if let Some(v) = self.max_upload_size {
+            os.write_uint32(6, v)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> XhttpInboundSettings {
+        XhttpInboundSettings::new()
+    }
+
+    fn clear(&mut self) {
+        self.host = ::std::option::Option::None;
+        self.path = ::std::option::Option::None;
+        self.mode = ::std::option::Option::None;
+        self.extra = ::std::option::Option::None;
+        self.download_settings = ::std::option::Option::None;
+        self.max_upload_size = ::std::option::Option::None;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static XhttpInboundSettings {
+        static instance: XhttpInboundSettings = XhttpInboundSettings {
+            host: ::std::option::Option::None,
+            path: ::std::option::Option::None,
+            mode: ::std::option::Option::None,
+            extra: ::std::option::Option::None,
+            download_settings: ::std::option::Option::None,
+            max_upload_size: ::std::option::Option::None,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+// @@protoc_insertion_point(message:FinalmaskMask)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct FinalmaskMask {
+    // message fields
+    // @@protoc_insertion_point(field:FinalmaskMask.mask_type)
+    pub mask_type: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:FinalmaskMask.settings)
+    pub settings: ::std::option::Option<::std::string::String>,
+    // special fields
+    // @@protoc_insertion_point(special_field:FinalmaskMask.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a FinalmaskMask {
+    fn default() -> &'a FinalmaskMask {
+        <FinalmaskMask as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl FinalmaskMask {
+    pub fn new() -> FinalmaskMask {
+        ::std::default::Default::default()
+    }
+}
+
+impl ::protobuf::Message for FinalmaskMask {
+    const NAME: &'static str = "FinalmaskMask";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.mask_type = ::std::option::Option::Some(is.read_string()?);
+                },
+                18 => {
+                    self.settings = ::std::option::Option::Some(is.read_string()?);
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.mask_type.as_ref() {
+            my_size += ::protobuf::rt::string_size(1, &v);
+        }
+        if let Some(v) = self.settings.as_ref() {
+            my_size += ::protobuf::rt::string_size(2, &v);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.mask_type.as_ref() {
+            os.write_string(1, v)?;
+        }
+        if let Some(v) = self.settings.as_ref() {
+            os.write_string(2, v)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> FinalmaskMask {
+        FinalmaskMask::new()
+    }
+
+    fn clear(&mut self) {
+        self.mask_type = ::std::option::Option::None;
+        self.settings = ::std::option::Option::None;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static FinalmaskMask {
+        static instance: FinalmaskMask = FinalmaskMask {
+            mask_type: ::std::option::Option::None,
+            settings: ::std::option::Option::None,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+// @@protoc_insertion_point(message:FinalmaskInboundSettings)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct FinalmaskInboundSettings {
+    // message fields
+    // @@protoc_insertion_point(field:FinalmaskInboundSettings.tcp)
+    pub tcp: ::std::vec::Vec<FinalmaskMask>,
+    // @@protoc_insertion_point(field:FinalmaskInboundSettings.udp)
+    pub udp: ::std::vec::Vec<FinalmaskMask>,
+    // @@protoc_insertion_point(field:FinalmaskInboundSettings.tcp_template)
+    pub tcp_template: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:FinalmaskInboundSettings.udp_template)
+    pub udp_template: ::std::option::Option<::std::string::String>,
+    // special fields
+    // @@protoc_insertion_point(special_field:FinalmaskInboundSettings.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a FinalmaskInboundSettings {
+    fn default() -> &'a FinalmaskInboundSettings {
+        <FinalmaskInboundSettings as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl FinalmaskInboundSettings {
+    pub fn new() -> FinalmaskInboundSettings {
+        ::std::default::Default::default()
+    }
+}
+
+impl ::protobuf::Message for FinalmaskInboundSettings {
+    const NAME: &'static str = "FinalmaskInboundSettings";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.tcp.push(is.read_message()?);
+                },
+                18 => {
+                    self.udp.push(is.read_message()?);
+                },
+                26 => {
+                    self.tcp_template = ::std::option::Option::Some(is.read_string()?);
+                },
+                34 => {
+                    self.udp_template = ::std::option::Option::Some(is.read_string()?);
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        for value in &self.tcp {
+            let len = value.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        };
+        for value in &self.udp {
+            let len = value.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        };
+        if let Some(v) = self.tcp_template.as_ref() {
+            my_size += ::protobuf::rt::string_size(3, &v);
+        }
+        if let Some(v) = self.udp_template.as_ref() {
+            my_size += ::protobuf::rt::string_size(4, &v);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        for v in &self.tcp {
+            ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+        };
+        for v in &self.udp {
+            ::protobuf::rt::write_message_field_with_cached_size(2, v, os)?;
+        };
+        if let Some(v) = self.tcp_template.as_ref() {
+            os.write_string(3, v)?;
+        }
+        if let Some(v) = self.udp_template.as_ref() {
+            os.write_string(4, v)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> FinalmaskInboundSettings {
+        FinalmaskInboundSettings::new()
+    }
+
+    fn clear(&mut self) {
+        self.tcp.clear();
+        self.udp.clear();
+        self.tcp_template = ::std::option::Option::None;
+        self.udp_template = ::std::option::Option::None;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static FinalmaskInboundSettings {
+        static instance: FinalmaskInboundSettings = FinalmaskInboundSettings {
+            tcp: ::std::vec::Vec::new(),
+            udp: ::std::vec::Vec::new(),
+            tcp_template: ::std::option::Option::None,
+            udp_template: ::std::option::Option::None,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+// @@protoc_insertion_point(message:Hysteria2InboundSettings)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct Hysteria2InboundSettings {
+    // message fields
+    // @@protoc_insertion_point(field:Hysteria2InboundSettings.password)
+    pub password: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:Hysteria2InboundSettings.obfs)
+    pub obfs: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:Hysteria2InboundSettings.obfs_password)
+    pub obfs_password: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:Hysteria2InboundSettings.masquerade)
+    pub masquerade: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:Hysteria2InboundSettings.masquerade_file)
+    pub masquerade_file: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:Hysteria2InboundSettings.masquerade_string)
+    pub masquerade_string: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:Hysteria2InboundSettings.up_mbps)
+    pub up_mbps: ::std::option::Option<u64>,
+    // @@protoc_insertion_point(field:Hysteria2InboundSettings.down_mbps)
+    pub down_mbps: ::std::option::Option<u64>,
+    // @@protoc_insertion_point(field:Hysteria2InboundSettings.ignore_client_bandwidth)
+    pub ignore_client_bandwidth: ::std::option::Option<bool>,
+    // @@protoc_insertion_point(field:Hysteria2InboundSettings.certificate)
+    pub certificate: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:Hysteria2InboundSettings.certificate_key)
+    pub certificate_key: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:Hysteria2InboundSettings.udp_idle_timeout)
+    pub udp_idle_timeout: ::std::option::Option<u64>,
+    // @@protoc_insertion_point(field:Hysteria2InboundSettings.mtu)
+    pub mtu: ::std::option::Option<u32>,
+    // special fields
+    // @@protoc_insertion_point(special_field:Hysteria2InboundSettings.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a Hysteria2InboundSettings {
+    fn default() -> &'a Hysteria2InboundSettings {
+        <Hysteria2InboundSettings as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl Hysteria2InboundSettings {
+    pub fn new() -> Hysteria2InboundSettings {
+        ::std::default::Default::default()
+    }
+}
+
+impl ::protobuf::Message for Hysteria2InboundSettings {
+    const NAME: &'static str = "Hysteria2InboundSettings";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.password = ::std::option::Option::Some(is.read_string()?);
+                },
+                18 => {
+                    self.obfs = ::std::option::Option::Some(is.read_string()?);
+                },
+                26 => {
+                    self.obfs_password = ::std::option::Option::Some(is.read_string()?);
+                },
+                34 => {
+                    self.masquerade = ::std::option::Option::Some(is.read_string()?);
+                },
+                42 => {
+                    self.masquerade_file = ::std::option::Option::Some(is.read_string()?);
+                },
+                50 => {
+                    self.masquerade_string = ::std::option::Option::Some(is.read_string()?);
+                },
+                56 => {
+                    self.up_mbps = ::std::option::Option::Some(is.read_uint64()?);
+                },
+                64 => {
+                    self.down_mbps = ::std::option::Option::Some(is.read_uint64()?);
+                },
+                72 => {
+                    self.ignore_client_bandwidth = ::std::option::Option::Some(is.read_bool()?);
+                },
+                82 => {
+                    self.certificate = ::std::option::Option::Some(is.read_string()?);
+                },
+                90 => {
+                    self.certificate_key = ::std::option::Option::Some(is.read_string()?);
+                },
+                96 => {
+                    self.udp_idle_timeout = ::std::option::Option::Some(is.read_uint64()?);
+                },
+                104 => {
+                    self.mtu = ::std::option::Option::Some(is.read_uint32()?);
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.password.as_ref() {
+            my_size += ::protobuf::rt::string_size(1, &v);
+        }
+        if let Some(v) = self.obfs.as_ref() {
+            my_size += ::protobuf::rt::string_size(2, &v);
+        }
+        if let Some(v) = self.obfs_password.as_ref() {
+            my_size += ::protobuf::rt::string_size(3, &v);
+        }
+        if let Some(v) = self.masquerade.as_ref() {
+            my_size += ::protobuf::rt::string_size(4, &v);
+        }
+        if let Some(v) = self.masquerade_file.as_ref() {
+            my_size += ::protobuf::rt::string_size(5, &v);
+        }
+        if let Some(v) = self.masquerade_string.as_ref() {
+            my_size += ::protobuf::rt::string_size(6, &v);
+        }
+        if let Some(v) = self.up_mbps {
+            my_size += ::protobuf::rt::uint64_size(7, v);
+        }
+        if let Some(v) = self.down_mbps {
+            my_size += ::protobuf::rt::uint64_size(8, v);
+        }
+        if let Some(v) = self.ignore_client_bandwidth {
+            my_size += 1 + 1;
+        }
+        if let Some(v) = self.certificate.as_ref() {
+            my_size += ::protobuf::rt::string_size(10, &v);
+        }
+        if let Some(v) = self.certificate_key.as_ref() {
+            my_size += ::protobuf::rt::string_size(11, &v);
+        }
+        if let Some(v) = self.udp_idle_timeout {
+            my_size += ::protobuf::rt::uint64_size(12, v);
+        }
+        if let Some(v) = self.mtu {
+            my_size += ::protobuf::rt::uint32_size(13, v);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.password.as_ref() {
+            os.write_string(1, v)?;
+        }
+        if let Some(v) = self.obfs.as_ref() {
+            os.write_string(2, v)?;
+        }
+        if let Some(v) = self.obfs_password.as_ref() {
+            os.write_string(3, v)?;
+        }
+        if let Some(v) = self.masquerade.as_ref() {
+            os.write_string(4, v)?;
+        }
+        if let Some(v) = self.masquerade_file.as_ref() {
+            os.write_string(5, v)?;
+        }
+        if let Some(v) = self.masquerade_string.as_ref() {
+            os.write_string(6, v)?;
+        }
+        if let Some(v) = self.up_mbps {
+            os.write_uint64(7, v)?;
+        }
+        if let Some(v) = self.down_mbps {
+            os.write_uint64(8, v)?;
+        }
+        if let Some(v) = self.ignore_client_bandwidth {
+            os.write_bool(9, v)?;
+        }
+        if let Some(v) = self.certificate.as_ref() {
+            os.write_string(10, v)?;
+        }
+        if let Some(v) = self.certificate_key.as_ref() {
+            os.write_string(11, v)?;
+        }
+        if let Some(v) = self.udp_idle_timeout {
+            os.write_uint64(12, v)?;
+        }
+        if let Some(v) = self.mtu {
+            os.write_uint32(13, v)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> Hysteria2InboundSettings {
+        Hysteria2InboundSettings::new()
+    }
+
+    fn clear(&mut self) {
+        self.password = ::std::option::Option::None;
+        self.obfs = ::std::option::Option::None;
+        self.obfs_password = ::std::option::Option::None;
+        self.masquerade = ::std::option::Option::None;
+        self.masquerade_file = ::std::option::Option::None;
+        self.masquerade_string = ::std::option::Option::None;
+        self.up_mbps = ::std::option::Option::None;
+        self.down_mbps = ::std::option::Option::None;
+        self.ignore_client_bandwidth = ::std::option::Option::None;
+        self.certificate = ::std::option::Option::None;
+        self.certificate_key = ::std::option::Option::None;
+        self.udp_idle_timeout = ::std::option::Option::None;
+        self.mtu = ::std::option::Option::None;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static Hysteria2InboundSettings {
+        static instance: Hysteria2InboundSettings = Hysteria2InboundSettings {
+            password: ::std::option::Option::None,
+            obfs: ::std::option::Option::None,
+            obfs_password: ::std::option::Option::None,
+            masquerade: ::std::option::Option::None,
+            masquerade_file: ::std::option::Option::None,
+            masquerade_string: ::std::option::Option::None,
+            up_mbps: ::std::option::Option::None,
+            down_mbps: ::std::option::Option::None,
+            ignore_client_bandwidth: ::std::option::Option::None,
+            certificate: ::std::option::Option::None,
+            certificate_key: ::std::option::Option::None,
+            udp_idle_timeout: ::std::option::Option::None,
+            mtu: ::std::option::Option::None,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
 // @@protoc_insertion_point(message:Inbound)
 #[derive(PartialEq,Clone,Default,Debug)]
 pub struct Inbound {
@@ -4250,6 +5481,8 @@ pub struct VlessOutboundSettings {
     pub port: u32,
     // @@protoc_insertion_point(field:VlessOutboundSettings.uuid)
     pub uuid: ::std::string::String,
+    // @@protoc_insertion_point(field:VlessOutboundSettings.encryption)
+    pub encryption: ::std::option::Option<::std::string::String>,
     // special fields
     // @@protoc_insertion_point(special_field:VlessOutboundSettings.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -4286,6 +5519,9 @@ impl ::protobuf::Message for VlessOutboundSettings {
                 26 => {
                     self.uuid = is.read_string()?;
                 },
+                162 => {
+                    self.encryption = ::std::option::Option::Some(is.read_string()?);
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -4307,6 +5543,9 @@ impl ::protobuf::Message for VlessOutboundSettings {
         if !self.uuid.is_empty() {
             my_size += ::protobuf::rt::string_size(3, &self.uuid);
         }
+        if let Some(v) = self.encryption.as_ref() {
+            my_size += ::protobuf::rt::string_size(20, &v);
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -4321,6 +5560,9 @@ impl ::protobuf::Message for VlessOutboundSettings {
         }
         if !self.uuid.is_empty() {
             os.write_string(3, &self.uuid)?;
+        }
+        if let Some(v) = self.encryption.as_ref() {
+            os.write_string(20, v)?;
         }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
@@ -4342,6 +5584,7 @@ impl ::protobuf::Message for VlessOutboundSettings {
         self.address.clear();
         self.port = 0;
         self.uuid.clear();
+        self.encryption = ::std::option::Option::None;
         self.special_fields.clear();
     }
 
@@ -4350,6 +5593,7 @@ impl ::protobuf::Message for VlessOutboundSettings {
             address: ::std::string::String::new(),
             port: 0,
             uuid: ::std::string::String::new(),
+            encryption: ::std::option::Option::None,
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
@@ -5163,6 +6407,499 @@ impl ::protobuf::Message for PluginOutboundSettings {
         static instance: PluginOutboundSettings = PluginOutboundSettings {
             path: ::std::string::String::new(),
             args: ::std::string::String::new(),
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+// @@protoc_insertion_point(message:XhttpOutboundSettings)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct XhttpOutboundSettings {
+    // message fields
+    // @@protoc_insertion_point(field:XhttpOutboundSettings.host)
+    pub host: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:XhttpOutboundSettings.path)
+    pub path: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:XhttpOutboundSettings.mode)
+    pub mode: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:XhttpOutboundSettings.extra)
+    pub extra: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:XhttpOutboundSettings.max_upload_size)
+    pub max_upload_size: ::std::option::Option<u32>,
+    // special fields
+    // @@protoc_insertion_point(special_field:XhttpOutboundSettings.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a XhttpOutboundSettings {
+    fn default() -> &'a XhttpOutboundSettings {
+        <XhttpOutboundSettings as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl XhttpOutboundSettings {
+    pub fn new() -> XhttpOutboundSettings {
+        ::std::default::Default::default()
+    }
+}
+
+impl ::protobuf::Message for XhttpOutboundSettings {
+    const NAME: &'static str = "XhttpOutboundSettings";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.host = ::std::option::Option::Some(is.read_string()?);
+                },
+                18 => {
+                    self.path = ::std::option::Option::Some(is.read_string()?);
+                },
+                26 => {
+                    self.mode = ::std::option::Option::Some(is.read_string()?);
+                },
+                34 => {
+                    self.extra = ::std::option::Option::Some(is.read_string()?);
+                },
+                40 => {
+                    self.max_upload_size = ::std::option::Option::Some(is.read_uint32()?);
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.host.as_ref() {
+            my_size += ::protobuf::rt::string_size(1, &v);
+        }
+        if let Some(v) = self.path.as_ref() {
+            my_size += ::protobuf::rt::string_size(2, &v);
+        }
+        if let Some(v) = self.mode.as_ref() {
+            my_size += ::protobuf::rt::string_size(3, &v);
+        }
+        if let Some(v) = self.extra.as_ref() {
+            my_size += ::protobuf::rt::string_size(4, &v);
+        }
+        if let Some(v) = self.max_upload_size {
+            my_size += ::protobuf::rt::uint32_size(5, v);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.host.as_ref() {
+            os.write_string(1, v)?;
+        }
+        if let Some(v) = self.path.as_ref() {
+            os.write_string(2, v)?;
+        }
+        if let Some(v) = self.mode.as_ref() {
+            os.write_string(3, v)?;
+        }
+        if let Some(v) = self.extra.as_ref() {
+            os.write_string(4, v)?;
+        }
+        if let Some(v) = self.max_upload_size {
+            os.write_uint32(5, v)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> XhttpOutboundSettings {
+        XhttpOutboundSettings::new()
+    }
+
+    fn clear(&mut self) {
+        self.host = ::std::option::Option::None;
+        self.path = ::std::option::Option::None;
+        self.mode = ::std::option::Option::None;
+        self.extra = ::std::option::Option::None;
+        self.max_upload_size = ::std::option::Option::None;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static XhttpOutboundSettings {
+        static instance: XhttpOutboundSettings = XhttpOutboundSettings {
+            host: ::std::option::Option::None,
+            path: ::std::option::Option::None,
+            mode: ::std::option::Option::None,
+            extra: ::std::option::Option::None,
+            max_upload_size: ::std::option::Option::None,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+// @@protoc_insertion_point(message:FinalmaskOutboundSettings)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct FinalmaskOutboundSettings {
+    // message fields
+    // @@protoc_insertion_point(field:FinalmaskOutboundSettings.tcp)
+    pub tcp: ::std::vec::Vec<FinalmaskMask>,
+    // @@protoc_insertion_point(field:FinalmaskOutboundSettings.udp)
+    pub udp: ::std::vec::Vec<FinalmaskMask>,
+    // @@protoc_insertion_point(field:FinalmaskOutboundSettings.tcp_template)
+    pub tcp_template: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:FinalmaskOutboundSettings.udp_template)
+    pub udp_template: ::std::option::Option<::std::string::String>,
+    // special fields
+    // @@protoc_insertion_point(special_field:FinalmaskOutboundSettings.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a FinalmaskOutboundSettings {
+    fn default() -> &'a FinalmaskOutboundSettings {
+        <FinalmaskOutboundSettings as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl FinalmaskOutboundSettings {
+    pub fn new() -> FinalmaskOutboundSettings {
+        ::std::default::Default::default()
+    }
+}
+
+impl ::protobuf::Message for FinalmaskOutboundSettings {
+    const NAME: &'static str = "FinalmaskOutboundSettings";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.tcp.push(is.read_message()?);
+                },
+                18 => {
+                    self.udp.push(is.read_message()?);
+                },
+                26 => {
+                    self.tcp_template = ::std::option::Option::Some(is.read_string()?);
+                },
+                34 => {
+                    self.udp_template = ::std::option::Option::Some(is.read_string()?);
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        for value in &self.tcp {
+            let len = value.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        };
+        for value in &self.udp {
+            let len = value.compute_size();
+            my_size += 1 + ::protobuf::rt::compute_raw_varint64_size(len) + len;
+        };
+        if let Some(v) = self.tcp_template.as_ref() {
+            my_size += ::protobuf::rt::string_size(3, &v);
+        }
+        if let Some(v) = self.udp_template.as_ref() {
+            my_size += ::protobuf::rt::string_size(4, &v);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        for v in &self.tcp {
+            ::protobuf::rt::write_message_field_with_cached_size(1, v, os)?;
+        };
+        for v in &self.udp {
+            ::protobuf::rt::write_message_field_with_cached_size(2, v, os)?;
+        };
+        if let Some(v) = self.tcp_template.as_ref() {
+            os.write_string(3, v)?;
+        }
+        if let Some(v) = self.udp_template.as_ref() {
+            os.write_string(4, v)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> FinalmaskOutboundSettings {
+        FinalmaskOutboundSettings::new()
+    }
+
+    fn clear(&mut self) {
+        self.tcp.clear();
+        self.udp.clear();
+        self.tcp_template = ::std::option::Option::None;
+        self.udp_template = ::std::option::Option::None;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static FinalmaskOutboundSettings {
+        static instance: FinalmaskOutboundSettings = FinalmaskOutboundSettings {
+            tcp: ::std::vec::Vec::new(),
+            udp: ::std::vec::Vec::new(),
+            tcp_template: ::std::option::Option::None,
+            udp_template: ::std::option::Option::None,
+            special_fields: ::protobuf::SpecialFields::new(),
+        };
+        &instance
+    }
+}
+
+// @@protoc_insertion_point(message:Hysteria2OutboundSettings)
+#[derive(PartialEq,Clone,Default,Debug)]
+pub struct Hysteria2OutboundSettings {
+    // message fields
+    // @@protoc_insertion_point(field:Hysteria2OutboundSettings.server)
+    pub server: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:Hysteria2OutboundSettings.password)
+    pub password: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:Hysteria2OutboundSettings.obfs)
+    pub obfs: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:Hysteria2OutboundSettings.obfs_password)
+    pub obfs_password: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:Hysteria2OutboundSettings.sni)
+    pub sni: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:Hysteria2OutboundSettings.insecure)
+    pub insecure: ::std::option::Option<bool>,
+    // @@protoc_insertion_point(field:Hysteria2OutboundSettings.alpn)
+    pub alpn: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:Hysteria2OutboundSettings.up_mbps)
+    pub up_mbps: ::std::option::Option<u64>,
+    // @@protoc_insertion_point(field:Hysteria2OutboundSettings.down_mbps)
+    pub down_mbps: ::std::option::Option<u64>,
+    // @@protoc_insertion_point(field:Hysteria2OutboundSettings.udp_idle_timeout)
+    pub udp_idle_timeout: ::std::option::Option<u64>,
+    // @@protoc_insertion_point(field:Hysteria2OutboundSettings.mtu)
+    pub mtu: ::std::option::Option<u32>,
+    // special fields
+    // @@protoc_insertion_point(special_field:Hysteria2OutboundSettings.special_fields)
+    pub special_fields: ::protobuf::SpecialFields,
+}
+
+impl<'a> ::std::default::Default for &'a Hysteria2OutboundSettings {
+    fn default() -> &'a Hysteria2OutboundSettings {
+        <Hysteria2OutboundSettings as ::protobuf::Message>::default_instance()
+    }
+}
+
+impl Hysteria2OutboundSettings {
+    pub fn new() -> Hysteria2OutboundSettings {
+        ::std::default::Default::default()
+    }
+}
+
+impl ::protobuf::Message for Hysteria2OutboundSettings {
+    const NAME: &'static str = "Hysteria2OutboundSettings";
+
+    fn is_initialized(&self) -> bool {
+        true
+    }
+
+    fn merge_from(&mut self, is: &mut ::protobuf::CodedInputStream<'_>) -> ::protobuf::Result<()> {
+        while let Some(tag) = is.read_raw_tag_or_eof()? {
+            match tag {
+                10 => {
+                    self.server = ::std::option::Option::Some(is.read_string()?);
+                },
+                18 => {
+                    self.password = ::std::option::Option::Some(is.read_string()?);
+                },
+                26 => {
+                    self.obfs = ::std::option::Option::Some(is.read_string()?);
+                },
+                34 => {
+                    self.obfs_password = ::std::option::Option::Some(is.read_string()?);
+                },
+                42 => {
+                    self.sni = ::std::option::Option::Some(is.read_string()?);
+                },
+                48 => {
+                    self.insecure = ::std::option::Option::Some(is.read_bool()?);
+                },
+                58 => {
+                    self.alpn = ::std::option::Option::Some(is.read_string()?);
+                },
+                64 => {
+                    self.up_mbps = ::std::option::Option::Some(is.read_uint64()?);
+                },
+                72 => {
+                    self.down_mbps = ::std::option::Option::Some(is.read_uint64()?);
+                },
+                80 => {
+                    self.udp_idle_timeout = ::std::option::Option::Some(is.read_uint64()?);
+                },
+                88 => {
+                    self.mtu = ::std::option::Option::Some(is.read_uint32()?);
+                },
+                tag => {
+                    ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
+                },
+            };
+        }
+        ::std::result::Result::Ok(())
+    }
+
+    // Compute sizes of nested messages
+    #[allow(unused_variables)]
+    fn compute_size(&self) -> u64 {
+        let mut my_size = 0;
+        if let Some(v) = self.server.as_ref() {
+            my_size += ::protobuf::rt::string_size(1, &v);
+        }
+        if let Some(v) = self.password.as_ref() {
+            my_size += ::protobuf::rt::string_size(2, &v);
+        }
+        if let Some(v) = self.obfs.as_ref() {
+            my_size += ::protobuf::rt::string_size(3, &v);
+        }
+        if let Some(v) = self.obfs_password.as_ref() {
+            my_size += ::protobuf::rt::string_size(4, &v);
+        }
+        if let Some(v) = self.sni.as_ref() {
+            my_size += ::protobuf::rt::string_size(5, &v);
+        }
+        if let Some(v) = self.insecure {
+            my_size += 1 + 1;
+        }
+        if let Some(v) = self.alpn.as_ref() {
+            my_size += ::protobuf::rt::string_size(7, &v);
+        }
+        if let Some(v) = self.up_mbps {
+            my_size += ::protobuf::rt::uint64_size(8, v);
+        }
+        if let Some(v) = self.down_mbps {
+            my_size += ::protobuf::rt::uint64_size(9, v);
+        }
+        if let Some(v) = self.udp_idle_timeout {
+            my_size += ::protobuf::rt::uint64_size(10, v);
+        }
+        if let Some(v) = self.mtu {
+            my_size += ::protobuf::rt::uint32_size(11, v);
+        }
+        my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
+        self.special_fields.cached_size().set(my_size as u32);
+        my_size
+    }
+
+    fn write_to_with_cached_sizes(&self, os: &mut ::protobuf::CodedOutputStream<'_>) -> ::protobuf::Result<()> {
+        if let Some(v) = self.server.as_ref() {
+            os.write_string(1, v)?;
+        }
+        if let Some(v) = self.password.as_ref() {
+            os.write_string(2, v)?;
+        }
+        if let Some(v) = self.obfs.as_ref() {
+            os.write_string(3, v)?;
+        }
+        if let Some(v) = self.obfs_password.as_ref() {
+            os.write_string(4, v)?;
+        }
+        if let Some(v) = self.sni.as_ref() {
+            os.write_string(5, v)?;
+        }
+        if let Some(v) = self.insecure {
+            os.write_bool(6, v)?;
+        }
+        if let Some(v) = self.alpn.as_ref() {
+            os.write_string(7, v)?;
+        }
+        if let Some(v) = self.up_mbps {
+            os.write_uint64(8, v)?;
+        }
+        if let Some(v) = self.down_mbps {
+            os.write_uint64(9, v)?;
+        }
+        if let Some(v) = self.udp_idle_timeout {
+            os.write_uint64(10, v)?;
+        }
+        if let Some(v) = self.mtu {
+            os.write_uint32(11, v)?;
+        }
+        os.write_unknown_fields(self.special_fields.unknown_fields())?;
+        ::std::result::Result::Ok(())
+    }
+
+    fn special_fields(&self) -> &::protobuf::SpecialFields {
+        &self.special_fields
+    }
+
+    fn mut_special_fields(&mut self) -> &mut ::protobuf::SpecialFields {
+        &mut self.special_fields
+    }
+
+    fn new() -> Hysteria2OutboundSettings {
+        Hysteria2OutboundSettings::new()
+    }
+
+    fn clear(&mut self) {
+        self.server = ::std::option::Option::None;
+        self.password = ::std::option::Option::None;
+        self.obfs = ::std::option::Option::None;
+        self.obfs_password = ::std::option::Option::None;
+        self.sni = ::std::option::Option::None;
+        self.insecure = ::std::option::Option::None;
+        self.alpn = ::std::option::Option::None;
+        self.up_mbps = ::std::option::Option::None;
+        self.down_mbps = ::std::option::Option::None;
+        self.udp_idle_timeout = ::std::option::Option::None;
+        self.mtu = ::std::option::Option::None;
+        self.special_fields.clear();
+    }
+
+    fn default_instance() -> &'static Hysteria2OutboundSettings {
+        static instance: Hysteria2OutboundSettings = Hysteria2OutboundSettings {
+            server: ::std::option::Option::None,
+            password: ::std::option::Option::None,
+            obfs: ::std::option::Option::None,
+            obfs_password: ::std::option::Option::None,
+            sni: ::std::option::Option::None,
+            insecure: ::std::option::Option::None,
+            alpn: ::std::option::Option::None,
+            up_mbps: ::std::option::Option::None,
+            down_mbps: ::std::option::Option::None,
+            udp_idle_timeout: ::std::option::Option::None,
+            mtu: ::std::option::Option::None,
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance

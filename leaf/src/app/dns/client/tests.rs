@@ -1,11 +1,15 @@
 #[cfg(test)]
 mod tests {
     use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use std::str::FromStr;
+    use std::sync::Arc;
     use std::time::Duration;
 
-    use super::{
-        DomainRule, DnsClient, IpMatcher, IpOption, NsClient, QueryStrategy, Resolver,
-    };
+    use hickory_proto::rr::{record_type::RecordType, Name};
+
+    use crate::app::fake_dns::{FakeDns, FakeDnsMode};
+
+    use super::{DomainRule, DnsClient, IpMatcher, IpOption, NsClient, QueryStrategy, Resolver};
 
     fn dns_server(address: &str) -> crate::config::DnsServer {
         let mut server = crate::config::DnsServer::new();
@@ -56,9 +60,6 @@ mod tests {
             strategy: None,
             tag: "dnsclient".to_owned(),
             timeout: Duration::from_secs(4),
-            disable_cache: false,
-            serve_stale: false,
-            serve_expired_ttl: 0,
             final_query,
             skip_fallback,
             policy_key: addr.to_owned(),
@@ -290,6 +291,203 @@ mod tests {
         }
     }
 
+    #[test]
+    fn load_servers_keeps_fakedns_entry() {
+        // The `fakedns` entry is accepted like any other server; if no engine
+        // has been registered the query reports a named error and falls
+        // through, so `["fakedns", "<real server>"]` still resolves.
+        let mut dns = crate::config::Dns::new();
+        dns.servers = vec![dns_server("fakedns"), dns_server("1.1.1.1")];
+        let servers = load_servers(&dns);
+        assert_eq!(servers.len(), 2);
+        assert!(matches!(servers[0].resolver, Resolver::FakeDns));
+        match &servers[1].resolver {
+            Resolver::Server(addr, false) => assert_eq!(
+                *addr,
+                SocketAddr::new(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1)), 53)
+            ),
+            _ => panic!("unexpected resolver"),
+        }
+    }
+
+    #[test]
+    fn load_servers_accepts_fakedns_as_the_only_server() {
+        let mut dns = crate::config::Dns::new();
+        dns.servers = vec![dns_server("fakedns")];
+        let servers = load_servers(&dns);
+        assert_eq!(servers.len(), 1);
+        assert!(matches!(servers[0].resolver, Resolver::FakeDns));
+    }
+
+    #[test]
+    fn load_servers_rejects_per_server_cache_options() {
+        // The cache is global, so per-server disableCache/serveStale/
+        // serveExpiredTTL are rejected rather than silently ignored.
+        let mut dns = crate::config::Dns::new();
+        let mut cached = dns_server("1.1.1.1");
+        cached.disable_cache = Some(true);
+        dns.servers = vec![cached, dns_server("8.8.8.8")];
+        let servers = load_servers(&dns);
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].to_string(), "8.8.8.8:53");
+    }
+
+    #[test]
+    fn fakedns_entry_is_not_a_direct_server() {
+        // A `fakedns` entry must not be miscategorised as a direct transport:
+        // it is neither collected for `direct_lookup` nor allowed to shadow a
+        // real `direct:` server there.
+        let client = new_client(vec!["fakedns", "direct:1.1.1.1"]);
+        assert_eq!(
+            collect_server_strings(&client, true),
+            vec!["direct:1.1.1.1:53".to_string()]
+        );
+        assert_eq!(
+            collect_server_strings(&client, false),
+            vec!["fakedns".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn fakedns_entry_reports_a_named_error_without_an_engine() {
+        // With no engine registered the entry still loads (the engine is
+        // registered after the client is built) and answers every query with
+        // the named error the fallback path relies on.
+        let client = new_client(vec!["fakedns"]);
+        assert!(matches!(client.servers[0].resolver, Resolver::FakeDns));
+        let name = Name::from_str("fake.example.").unwrap();
+        let err = client
+            .query_record_type(
+                false,
+                &name,
+                "fake.example",
+                RecordType::A,
+                IpOption::new(true, true),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("no fake-DNS engine"),
+            "unexpected error: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn fakedns_entry_is_answered_by_the_registered_engine() {
+        let mut client = new_client(vec!["fakedns", "1.1.1.1"]);
+        // Accepted, and not miscategorised as a direct server.
+        let fake = client
+            .servers
+            .iter()
+            .find(|s| matches!(s.resolver, Resolver::FakeDns))
+            .expect("the fakedns entry must be kept");
+        assert!(!fake.is_direct());
+        assert_eq!(client.servers.len(), 2);
+
+        client.replace_fakedns(Arc::new(FakeDns::new(FakeDnsMode::Exclude, vec![])));
+
+        let name = Name::from_str("fake.example.").unwrap();
+        let entry = client
+            .query_record_type(
+                false,
+                &name,
+                "fake.example",
+                RecordType::A,
+                IpOption::new(true, true),
+            )
+            .await
+            .unwrap();
+        let ip = match entry.ips.as_slice() {
+            [IpAddr::V4(ip)] => *ip,
+            other => panic!("expected one fake IPv4, got {:?}", other),
+        };
+        assert_eq!(&ip.octets()[..2], &[198, 18]);
+        // The engine and the returned mapping agree.
+        assert_eq!(
+            client
+                .fakedns
+                .as_ref()
+                .unwrap()
+                .query_domain(&entry.ips[0])
+                .await
+                .as_deref(),
+            Some("fake.example")
+        );
+    }
+
+    #[tokio::test]
+    async fn fakedns_query_falls_through_to_the_next_server() {
+        // A stub name server on loopback that answers every request with
+        // 10.9.8.7, standing in for the real server next to `fakedns`.
+        let stub = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let stub_addr = stub.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let mut buf = vec![0u8; 1024];
+            while let Ok((n, peer)) = stub.recv_from(&mut buf).await {
+                if let Some(resp) = a_record_response(&buf[..n], Ipv4Addr::new(10, 9, 8, 7)) {
+                    let _ = stub.send_to(&resp, peer).await;
+                }
+            }
+        });
+
+        let mut client = new_client(vec!["fakedns"]);
+        client.replace_fakedns(Arc::new(FakeDns::new(FakeDnsMode::Exclude, vec![])));
+
+        // The engine is registered, but it only answers A records, so an AAAA
+        // lookup must fall through to the next server instead of failing.
+        let fake = make_ns("fakedns", &[], false, false);
+        let next = make_ns(
+            &format!("direct:127.0.0.1:{}", stub_addr.port()),
+            &[],
+            false,
+            false,
+        );
+        let request = DnsClient::new_query(
+            Name::from_str("normal.example.").unwrap(),
+            RecordType::AAAA,
+            None,
+        )
+        .to_vec()
+        .unwrap();
+        let entry = client
+            .serial_query(&[&fake, &next], "normal.example", RecordType::AAAA, &request)
+            .await
+            .unwrap();
+
+        assert_eq!(entry.ips, vec![IpAddr::V4(Ipv4Addr::new(10, 9, 8, 7))]);
+        server.abort();
+    }
+
+    /// Builds a minimal DNS response copying the request's question and
+    /// answering with a single A record.
+    fn a_record_response(request: &[u8], ip: Ipv4Addr) -> Option<Vec<u8>> {
+        use hickory_proto::op::{
+            header::MessageType, op_code::OpCode, response_code::ResponseCode, Message,
+        };
+        use hickory_proto::rr::{
+            dns_class::DNSClass, rdata, record_data::RData, record_type::RecordType,
+            resource::Record,
+        };
+
+        let req = Message::from_vec(request).ok()?;
+        let query = req.queries().first()?.clone();
+        let mut resp = Message::new();
+        resp.set_id(req.id())
+            .set_message_type(MessageType::Response)
+            .set_op_code(OpCode::Query)
+            .set_response_code(ResponseCode::NoError);
+        resp.add_query(query.clone());
+        let mut ans = Record::new();
+        ans.set_name(query.name().clone())
+            .set_rr_type(RecordType::A)
+            .set_dns_class(DNSClass::IN)
+            .set_ttl(60)
+            .set_data(Some(RData::A(rdata::A(ip))));
+        resp.add_answer(ans);
+        resp.to_vec().ok()
+    }
+
     fn collect_server_strings(client: &DnsClient, is_direct: bool) -> Vec<String> {
         client
             .collect_servers(is_direct)
@@ -382,6 +580,29 @@ mod tests {
         assert!(DomainRule::parse("ample").unwrap().matches("example.com"));
         assert!(DomainRule::Dotless.matches("myhost"));
         assert!(!DomainRule::Dotless.matches("myhost.example.com"));
+    }
+
+    #[test]
+    fn domain_rules_lowercase_their_values() {
+        // Xray lowercases `full:`/`domain:`/`keyword:`/bare values while
+        // building the matcher, and the query domain is lowercased too; a rule
+        // containing an uppercase letter must therefore still match.
+        assert!(DomainRule::parse("full:Example.COM")
+            .unwrap()
+            .matches("example.com"));
+        assert!(DomainRule::parse("domain:Example.COM")
+            .unwrap()
+            .matches("www.example.com"));
+        assert!(DomainRule::parse("keyword:AMPLE")
+            .unwrap()
+            .matches("example.com"));
+        assert!(DomainRule::parse("AMPLE").unwrap().matches("example.com"));
+        // A regexp is kept verbatim, so a case-insensitive pattern still needs
+        // its own `(?i)`.
+        #[cfg(feature = "regex")]
+        assert!(DomainRule::parse("regexp:(?i)^ADS\\.")
+            .unwrap()
+            .matches("ads.example.com"));
     }
 
     #[cfg(feature = "regex")]

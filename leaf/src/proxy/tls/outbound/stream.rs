@@ -256,8 +256,8 @@ fn curve_named_group(name: &str) -> Option<&'static str> {
 fn apply_curve_preferences(provider: &mut CryptoProvider, names: &[String]) -> Result<()> {
     let mut groups: Vec<&'static dyn SupportedKxGroup> = Vec::new();
     for name in names {
-        let expected =
-            curve_named_group(name).ok_or_else(|| anyhow!("unsupported tls curve_preference: {name}"))?;
+        let expected = curve_named_group(name)
+            .ok_or_else(|| anyhow!("unsupported tls curve_preference: {name}"))?;
         let group = provider
             .kx_groups
             .iter()
@@ -282,9 +282,10 @@ fn load_cert_source(roots: &mut RootCertStore, source: &str) -> Result<()> {
             roots.add(cert?)?;
         }
     } else {
-        let mut pem = BufReader::new(File::open(source).map_err(|e| {
-            anyhow!("load certificates from {source} failed: {e}")
-        })?);
+        let mut pem = BufReader::new(
+            File::open(source)
+                .map_err(|e| anyhow!("load certificates from {source} failed: {e}"))?,
+        );
         for cert in rustls_pemfile::certs(&mut pem) {
             roots.add(cert?)?;
         }
@@ -323,20 +324,24 @@ fn build_rustls_options(
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
             {
-                load_cert_source(&mut roots, path)
-                    .map_err(|e| anyhow!("tls outbound certificates[{idx}].certificate_file: {e}"))?;
+                load_cert_source(&mut roots, path).map_err(|e| {
+                    anyhow!("tls outbound certificates[{idx}].certificate_file: {e}")
+                })?;
             }
         }
         if !disable_system_root {
             roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
         }
     } else {
+        // The flat `certificate` is a custom CA list, exactly like
+        // `certificates[]` with `usage: "verify"`: add it alongside the system
+        // roots unless the caller dropped them. It must never silently replace
+        // the webpki roots.
         let flat = settings.certificate.trim();
         if !flat.is_empty() {
-            // Existing flat behaviour: the configured certificate(s) replace the
-            // webpki root set entirely.
             load_cert_source(&mut roots, flat)?;
-        } else if !disable_system_root {
+        }
+        if !disable_system_root {
             roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
         }
     }
@@ -350,7 +355,10 @@ fn build_rustls_options(
         None => Vec::new(),
     };
 
-    let versions = rustls_versions(settings.min_version.as_deref(), settings.max_version.as_deref())?;
+    let versions = rustls_versions(
+        settings.min_version.as_deref(),
+        settings.max_version.as_deref(),
+    )?;
 
     #[cfg(feature = "rustls-tls-aws-lc")]
     let mut provider = rustls::crypto::aws_lc_rs::default_provider();
@@ -367,12 +375,10 @@ fn build_rustls_options(
     let provider: Arc<CryptoProvider> = Arc::new(provider);
 
     let verifier = if !insecure && (!pins.is_empty() || !verify_names.is_empty()) {
-        let inner = WebPkiServerVerifier::builder_with_provider(
-            Arc::new(roots.clone()),
-            provider.clone(),
-        )
-        .build()
-        .map_err(|e| anyhow!("build tls outbound cert verifier failed: {e}"))?;
+        let inner =
+            WebPkiServerVerifier::builder_with_provider(Arc::new(roots.clone()), provider.clone())
+                .build()
+                .map_err(|e| anyhow!("build tls outbound cert verifier failed: {e}"))?;
         Some(
             Arc::new(verify::PinnedVerifier::new(pins, verify_names, inner))
                 as Arc<dyn ServerCertVerifier>,
@@ -382,7 +388,8 @@ fn build_rustls_options(
     };
 
     let master_key_log = settings.master_key_log.as_deref().unwrap_or("").trim();
-    let explicit_key_log = !master_key_log.is_empty() && !master_key_log.eq_ignore_ascii_case("none");
+    let explicit_key_log =
+        !master_key_log.is_empty() && !master_key_log.eq_ignore_ascii_case("none");
     if explicit_key_log {
         match std::env::var_os("SSLKEYLOGFILE") {
             Some(path) if path == std::ffi::OsStr::new(master_key_log) => {}
@@ -424,10 +431,7 @@ impl Handler {
             #[cfg(feature = "rustls-tls-aws-lc")]
             {
                 if let Some(versions) = &options.versions {
-                    if !versions
-                        .iter()
-                        .any(|v| std::ptr::eq(*v, &version::TLS13))
-                    {
+                    if !versions.iter().any(|v| std::ptr::eq(*v, &version::TLS13)) {
                         return Err(anyhow!(
                             "tls outbound ech requires TLS 1.3 but max_version excludes it"
                         ));
@@ -561,7 +565,10 @@ impl Handler {
             let dns_client = self.dns_client.read().await;
             Some(dns_client.lookup_ech_config_list(name).await)
         } else {
-            trace!("ech source for {}: fixed-or-none (dns lookup skipped)", name);
+            trace!(
+                "ech source for {}: fixed-or-none (dns lookup skipped)",
+                name
+            );
             None
         };
         Self::resolve_selected_ech_config_list(
@@ -586,6 +593,16 @@ impl Handler {
     /// * `pinnedPeerCertSha256`: an unsynchronized pin matches the leaf only;
     ///   it does not support pinning an intermediate CA the way Xray does.
     pub fn new(settings: &TlsOutboundSettings, dns_client: SyncDnsClient) -> Result<Self> {
+        // `certificateKey`/`rawCertificateKey` mean a client certificate for
+        // mutual TLS, which this outbound does not implement. Reject the key
+        // explicitly instead of silently dropping it and then misreading the
+        // paired `certificate` as a trust anchor.
+        if !settings.certificate_key.trim().is_empty() {
+            return Err(anyhow!(
+                "tls outbound certificateKey is not supported: client certificate (mutual TLS) authentication is not implemented"
+            ));
+        }
+
         let fingerprint = settings.fingerprint.as_deref().unwrap_or("").trim();
         if !fingerprint.is_empty() && !fingerprint.eq_ignore_ascii_case("unsafe") {
             return Err(anyhow!(
@@ -733,17 +750,32 @@ impl Handler {
             None => {}
         }
 
-        if let Some(value) = settings.min_version.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some(value) = settings
+            .min_version
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             builder
                 .set_min_proto_version(Some(openssl_version(value)?))
                 .map_err(|e| anyhow!("invalid tls min_version {value:?}: {e}"))?;
         }
-        if let Some(value) = settings.max_version.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some(value) = settings
+            .max_version
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             builder
                 .set_max_proto_version(Some(openssl_version(value)?))
                 .map_err(|e| anyhow!("invalid tls max_version {value:?}: {e}"))?;
         }
-        if let Some(spec) = settings.cipher_suites.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some(spec) = settings
+            .cipher_suites
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
             builder
                 .set_cipher_list(spec)
                 .map_err(|e| anyhow!("invalid tls cipher_suites {spec:?}: {e}"))?;
@@ -777,7 +809,10 @@ impl Handler {
             let mut wire = Vec::new();
             for alpn in alpns.iter() {
                 if alpn.len() > 255 {
-                    return Err(anyhow!("tls outbound alpn protocol name too long: {}", alpn));
+                    return Err(anyhow!(
+                        "tls outbound alpn protocol name too long: {}",
+                        alpn
+                    ));
                 }
                 wire.push(alpn.len() as u8);
                 wire.extend_from_slice(alpn.as_bytes());
@@ -813,8 +848,7 @@ fn add_pem_to_openssl_roots(
     let data = if source.contains("-----BEGIN") {
         source.as_bytes().to_vec()
     } else {
-        std::fs::read(source)
-            .map_err(|e| anyhow!("load certificates from {source} failed: {e}"))?
+        std::fs::read(source).map_err(|e| anyhow!("load certificates from {source} failed: {e}"))?
     };
     let certs = X509::stack_from_pem(&data)
         .map_err(|e| anyhow!("parse certificates from {source} failed: {e}"))?;
@@ -1005,7 +1039,9 @@ impl OutboundStreamHandler for Handler {
                             .await?;
                         ech_config_selected = selected_ech.is_some();
                         Self::build_rustls_config(&self.rustls_options, selected_ech.as_deref())
-                            .map_err(|e| io::Error::other(format!("build tls config failed: {}", e)))?
+                            .map_err(|e| {
+                                io::Error::other(format!("build tls config failed: {}", e))
+                            })?
                     } else {
                         self.tls_config
                             .as_ref()
@@ -1154,9 +1190,18 @@ mod tests {
     #[test]
     fn test_rustls_versions_defaults_to_none() {
         assert!(rustls_versions(None, None).unwrap().is_none());
-        assert_eq!(rustls_versions(Some("1.2"), None).unwrap().unwrap().len(), 2);
-        assert_eq!(rustls_versions(None, Some("1.2")).unwrap().unwrap().len(), 1);
-        assert_eq!(rustls_versions(Some("1.3"), None).unwrap().unwrap().len(), 1);
+        assert_eq!(
+            rustls_versions(Some("1.2"), None).unwrap().unwrap().len(),
+            2
+        );
+        assert_eq!(
+            rustls_versions(None, Some("1.2")).unwrap().unwrap().len(),
+            1
+        );
+        assert_eq!(
+            rustls_versions(Some("1.3"), None).unwrap().unwrap().len(),
+            1
+        );
     }
 
     #[test]
@@ -1211,6 +1256,11 @@ mod tests {
         assert!(!Handler::should_skip_ech_dns_lookup_for_session(&sess));
     }
 
+    // Only the `rustls-tls-aws-lc` backend validates `echConfigList` at
+    // construction; on ring the config list is accepted at startup and the
+    // failure happens at connect time (see
+    // `test_new_with_ech_on_ring_does_not_fail_startup`).
+    #[cfg(feature = "rustls-tls-aws-lc")]
     #[test]
     fn test_new_with_invalid_ech_config_list_fails() {
         let mut settings = TlsOutboundSettings::new();
@@ -1232,8 +1282,7 @@ mod tests {
     #[cfg(not(feature = "rustls-tls-aws-lc"))]
     #[test]
     fn test_build_rustls_config_with_ech_on_ring_returns_connection_error() {
-        let err =
-            Handler::build_rustls_config(&test_rustls_options(), Some("AQID")).unwrap_err();
+        let err = Handler::build_rustls_config(&test_rustls_options(), Some("AQID")).unwrap_err();
         assert!(err.to_string().contains("requires rustls-tls-aws-lc"));
     }
 }

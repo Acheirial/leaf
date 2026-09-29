@@ -12,7 +12,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     app::dispatcher::Dispatcher,
-    app::fake_dns::{FakeDns, FakeDnsMode},
+    app::fake_dns::FakeDns,
     app::nat_manager::NatManager,
     app::nat_manager::UdpPacket,
     config::{Inbound, TunInboundSettings},
@@ -518,6 +518,7 @@ pub fn new(
     inbound: Inbound,
     dispatcher: Arc<Dispatcher>,
     nat_manager: Arc<NatManager>,
+    fake_dns: Arc<FakeDns>,
 ) -> Result<Runner> {
     tracing::debug!("Create TUN inbound");
 
@@ -564,27 +565,13 @@ pub fn new(
         cfg.up();
     }
 
-    // FIXME it's a bad design to have 2 lists in config while we need only one
-    let fake_dns_exclude = settings.fake_dns_exclude;
-    let fake_dns_include = settings.fake_dns_include;
-    if !fake_dns_exclude.is_empty() && !fake_dns_include.is_empty() {
-        return Err(anyhow!(
-            "fake DNS run in either include mode or exclude mode"
-        ));
-    }
-    let fakedns = if !fake_dns_include.is_empty() {
-        Some(Arc::new(FakeDns::new(
-            FakeDnsMode::Include,
-            fake_dns_include,
-        )))
-    } else if !fake_dns_exclude.is_empty() {
-        Some(Arc::new(FakeDns::new(
-            FakeDnsMode::Exclude,
-            fake_dns_exclude,
-        )))
-    } else {
-        None
-    };
+    // The fake-DNS engine is process-wide: it is constructed once in
+    // `lib::start` from this inbound's `fakeDnsInclude`/`fakeDnsExclude`
+    // (validated there) and handed down here, so the sniffer and the dns
+    // client's `fakedns` server form share the same IP mappings. It is passed
+    // as an `Option` only because the netstack handlers take one; it is always
+    // set.
+    let fakedns = Some(fake_dns);
 
     #[cfg(target_os = "windows")]
     {

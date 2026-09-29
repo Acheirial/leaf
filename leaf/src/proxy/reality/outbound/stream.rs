@@ -1,3 +1,35 @@
+//! REALITY outbound (client) handler — aligned with Xray's `reality.UClient`.
+//!
+//! The authentication construction in [`super::super::stream::build_rustls_config`]
+//! plus `RealityConnectionState::apply_reality` (in the `reality` crate) matches
+//! Xray exactly:
+//!
+//! * `AuthKey = HKDF-SHA256(ikm = X25519(client_ephemeral, server_public_key),
+//!   salt = ClientHello.random[0..20], info = "REALITY")`;
+//! * `session_id = AES-256-GCM(AuthKey, nonce = random[20..32],
+//!   plaintext = version[3] || 0 || unix_time[4] || short_id[8],
+//!   aad = ClientHello handshake message with the session id zeroed)`;
+//! * the server is verified through `HMAC-SHA512(AuthKey, ed25519_spki)` on the
+//!   dummy certificate.
+//!
+//! ALPN is offered as `["h2", "http/1.1"]`, matching Xray's default uTLS
+//! fingerprint ALPN set.
+//!
+//! Options Xray exposes that this runtime cannot express (see the wave report):
+//! * `fingerprint` — reproducing a uTLS ClientHello preset requires a patched
+//!   TLS stack; the patched rustls here generates its own ClientHello. The
+//!   `tls` outbound handles the same limitation by rejecting non-`unsafe`
+//!   fingerprints.
+//! * `spiderX` — the post-handshake crawl of a "real certificate" server needs
+//!   an HTTP/2 client (Xray uses net/http + http2); this crate has no HTTP
+//!   client dependency, and the fallback `WebPkiServerVerifier` already fails
+//!   the handshake on a non-REALITY certificate.
+//! * `flow` — a VLESS payload option (`xtls-rprx-vision`), not a REALITY
+//!   transport option; it belongs to the `vless` outbound.
+//!
+//! The hub-owned `RealityOutboundSettings` currently carries only
+//! `server_name`/`public_key`/`short_id`, so none of the three can be sourced
+//! from config without extending the proto/serde surface.
 use std::io;
 use std::sync::Arc;
 

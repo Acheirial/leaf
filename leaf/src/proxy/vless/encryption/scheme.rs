@@ -1,0 +1,234 @@
+//! Parsing of the `mlkem768x25519plus` configuration strings.
+//!
+//! The grammar is the one `Xray-core/infra/conf/vless.go` accepts. Parsing is
+//! kept separate from the handshake so a bad or unsupported scheme fails at
+//! configuration time with a precise error.
+
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
+
+use super::EncryptionError;
+
+/// How the ephemeral public keys are disguised on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XorMode {
+    /// Keys travel as-is.
+    Native,
+    /// Keys are XORed with a key derived from the server's public key.
+    XorPub,
+    /// The whole client hello after the first key is XORed.
+    Random,
+}
+
+impl XorMode {
+    fn parse(s: &str) -> Result<Self, EncryptionError> {
+        match s {
+            "native" => Ok(XorMode::Native),
+            "xorpub" => Ok(XorMode::XorPub),
+            "random" => Ok(XorMode::Random),
+            _ => Err(EncryptionError::Invalid(format!(
+                "unknown encryption mode {:?}",
+                s
+            ))),
+        }
+    }
+}
+
+const SCHEME: &str = "mlkem768x25519plus";
+
+/// A key is either an X25519 key or an ML-KEM-768 key; their encoded sizes
+/// tell them apart.
+const X25519_KEY: usize = 32;
+const MLKEM_PUBLIC_KEY: usize = 1184;
+const MLKEM_PRIVATE_SEED: usize = 64;
+
+/// A parsed client (`encryption`) setting.
+#[derive(Debug)]
+pub struct ClientScheme {
+    pub mode: XorMode,
+    /// Non-zero enables the 0-RTT ticket cache.
+    pub seconds: u32,
+    pub padding: String,
+    /// Public keys, X25519 (32 bytes) or ML-KEM-768 encapsulation key
+    /// (1184 bytes).
+    pub keys: Vec<Vec<u8>>,
+}
+
+impl ClientScheme {
+    pub fn parse(s: &str) -> Result<Self, EncryptionError> {
+        let parts: Vec<&str> = s.split('.').collect();
+        if parts.len() < 4 || parts[0] != SCHEME {
+            return Err(EncryptionError::Invalid(format!(
+                "expected a {} scheme, got {:?}",
+                SCHEME, s
+            )));
+        }
+        let mode = XorMode::parse(parts[1])?;
+        let seconds = match parts[2] {
+            "1rtt" => 0,
+            "0rtt" => 1,
+            other => {
+                return Err(EncryptionError::Invalid(format!(
+                    "unknown client rtt mode {:?}",
+                    other
+                )))
+            }
+        };
+        let (padding, keys) = split_padding_and_keys(&parts[3..], &[X25519_KEY, MLKEM_PUBLIC_KEY])?;
+        Ok(ClientScheme {
+            mode,
+            seconds,
+            padding,
+            keys,
+        })
+    }
+
+    pub fn mode(&self) -> XorMode {
+        self.mode
+    }
+}
+
+/// A parsed server (`decryption`) setting.
+#[derive(Debug)]
+pub struct ServerScheme {
+    pub mode: XorMode,
+    pub seconds_from: i64,
+    pub seconds_to: i64,
+    pub padding: String,
+    /// Private keys, X25519 (32 bytes) or ML-KEM-768 seed (64 bytes).
+    pub keys: Vec<Vec<u8>>,
+}
+
+impl ServerScheme {
+    pub fn parse(s: &str) -> Result<Self, EncryptionError> {
+        let parts: Vec<&str> = s.split('.').collect();
+        if parts.len() < 4 || parts[0] != SCHEME {
+            return Err(EncryptionError::Invalid(format!(
+                "expected a {} scheme, got {:?}",
+                SCHEME, s
+            )));
+        }
+        let mode = XorMode::parse(parts[1])?;
+        let (seconds_from, seconds_to) = parse_seconds(parts[2])?;
+        let (padding, keys) =
+            split_padding_and_keys(&parts[3..], &[X25519_KEY, MLKEM_PRIVATE_SEED])?;
+        Ok(ServerScheme {
+            mode,
+            seconds_from,
+            seconds_to,
+            padding,
+            keys,
+        })
+    }
+
+    pub fn mode(&self) -> XorMode {
+        self.mode
+    }
+}
+
+/// Server seconds are `N[s]` or `N[s]-M[s]`.
+fn parse_seconds(s: &str) -> Result<(i64, i64), EncryptionError> {
+    let s = s.strip_suffix('s').unwrap_or(s);
+    let mut it = s.splitn(2, '-');
+    let from = it
+        .next()
+        .and_then(|v| v.parse::<i64>().ok())
+        .ok_or_else(|| EncryptionError::Invalid(format!("invalid seconds {:?}", s)))?;
+    let to = match it.next() {
+        Some(v) => v
+            .parse::<i64>()
+            .map_err(|_| EncryptionError::Invalid(format!("invalid seconds {:?}", s)))?,
+        None => 0,
+    };
+    Ok((from, to))
+}
+
+/// The optional padding parameters come first and are short (a few digits and
+/// dashes); keys are longer base64url strings. Returns the padding string and
+/// the decoded keys.
+fn split_padding_and_keys(
+    parts: &[&str],
+    allowed_key_len: &[usize],
+) -> Result<(String, Vec<Vec<u8>>), EncryptionError> {
+    let mut split = parts.len();
+    for (i, r) in parts.iter().enumerate() {
+        if r.len() >= 20 {
+            split = i;
+            break;
+        }
+    }
+    let padding = parts[..split].join(".");
+    let mut keys = Vec::new();
+    for r in &parts[split..] {
+        let key = URL_SAFE_NO_PAD.decode(r).map_err(|e| {
+            EncryptionError::Invalid(format!("invalid encryption key {:?}: {}", r, e))
+        })?;
+        if !allowed_key_len.contains(&key.len()) {
+            return Err(EncryptionError::Invalid(format!(
+                "encryption key has unsupported length {}",
+                key.len()
+            )));
+        }
+        keys.push(key);
+    }
+    if keys.is_empty() {
+        return Err(EncryptionError::Invalid(
+            "the scheme carries no keys".to_string(),
+        ));
+    }
+    Ok((padding, keys))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(n: usize) -> String {
+        URL_SAFE_NO_PAD.encode(vec![0xab; n])
+    }
+
+    #[test]
+    fn client_scheme_without_padding() {
+        let s = format!("mlkem768x25519plus.xorpub.0rtt.{}", key(MLKEM_PUBLIC_KEY));
+        let scheme = ClientScheme::parse(&s).unwrap();
+        assert_eq!(scheme.mode, XorMode::XorPub);
+        assert_eq!(scheme.seconds, 1);
+        assert_eq!(scheme.padding, "");
+        assert_eq!(scheme.keys.len(), 1);
+        assert_eq!(scheme.keys[0].len(), MLKEM_PUBLIC_KEY);
+    }
+
+    #[test]
+    fn server_scheme_with_padding_and_two_keys() {
+        let s = format!(
+            "mlkem768x25519plus.random.600s-1200s.100-111-1111.50-0-3333.{}.{}",
+            key(X25519_KEY),
+            key(MLKEM_PRIVATE_SEED)
+        );
+        let scheme = ServerScheme::parse(&s).unwrap();
+        assert_eq!(scheme.mode, XorMode::Random);
+        assert_eq!((scheme.seconds_from, scheme.seconds_to), (600, 1200));
+        assert_eq!(scheme.padding, "100-111-1111.50-0-3333");
+        assert_eq!(scheme.keys.len(), 2);
+        assert_eq!(scheme.keys[0].len(), X25519_KEY);
+        assert_eq!(scheme.keys[1].len(), MLKEM_PRIVATE_SEED);
+    }
+
+    #[test]
+    fn rejects_unknown_scheme() {
+        assert!(ClientScheme::parse("none").is_err());
+        assert!(ServerScheme::parse("mlkem768x25519plus.native.600s").is_err());
+        assert!(ServerScheme::parse(&format!(
+            "mlkem768x25519plus.bogus.600s.{}",
+            key(X25519_KEY)
+        ))
+        .is_err());
+    }
+
+    #[test]
+    fn rejects_wrong_key_size() {
+        assert!(
+            ClientScheme::parse(&format!("mlkem768x25519plus.native.1rtt.{}", key(64))).is_err()
+        );
+    }
+}

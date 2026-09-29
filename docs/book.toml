@@ -1,0 +1,10 @@
+[book]
+title = "leaf"
+language = "en"
+src = "src"
+
+[output.html]
+site-url = "/leaf/"
+
+[output.html.search]
+enable = true

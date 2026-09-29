@@ -397,3 +397,51 @@ fn test_tls_ech_disable_dns_lookup_mapping() {
     assert!(outbound.ech_disable_dns_lookup);
     assert_eq!(outbound.ech_config_list, "AQI=");
 }
+
+#[test]
+fn test_tproxy_inbound_reaches_manager() {
+    let json_str = r#"
+    {
+        "inbounds": [
+            {
+                "tag": "tproxy_in",
+                "protocol": "tproxy",
+                "address": "0.0.0.0",
+                "port": 12345
+            }
+        ]
+    }
+    "#;
+
+    let config = crate::config::json::from_string(json_str).unwrap();
+    assert_eq!(config.inbounds.len(), 1);
+    assert_eq!(config.inbounds[0].tag, "tproxy_in");
+    assert_eq!(config.inbounds[0].protocol, "tproxy");
+    assert_eq!(config.inbounds[0].address, "0.0.0.0");
+    assert_eq!(config.inbounds[0].port, 12345);
+    assert!(
+        config.inbounds[0].settings.is_empty(),
+        "tproxy takes no settings"
+    );
+}
+
+#[test]
+fn test_tproxy_inbound_rejects_unknown_settings() {
+    let json_str = r#"
+    {
+        "inbounds": [
+            {
+                "tag": "tproxy_in",
+                "protocol": "tproxy",
+                "address": "0.0.0.0",
+                "port": 12345,
+                "settings": {
+                    "unexpected": true
+                }
+            }
+        ]
+    }
+    "#;
+
+    assert!(crate::config::json::from_string(json_str).is_err());
+}

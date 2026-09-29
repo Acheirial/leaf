@@ -17,9 +17,16 @@ use notify::{
     event, Error as NotifyError, RecommendedWatcher, RecursiveMode, Result as NotifyResult, Watcher,
 };
 
+use protobuf::Message;
+
 use app::{
-    dispatcher::Dispatcher, dns::DnsClient, inbound::manager::InboundManager,
-    nat_manager::NatManager, outbound::manager::OutboundManager, router::Router,
+    dispatcher::Dispatcher,
+    dns::DnsClient,
+    fake_dns::{FakeDns, FakeDnsMode},
+    inbound::manager::InboundManager,
+    nat_manager::NatManager,
+    outbound::manager::OutboundManager,
+    router::Router,
 };
 
 use crate::app::{stat_manager::StatManager, SyncStatManager};
@@ -203,8 +210,9 @@ impl RuntimeManager {
 
     // This function could block by an in-progress connection dialing.
     //
-    // TODO Reload FakeDns. And perhaps the inbounds as long as the listening
-    // addresses haven't changed.
+    // TODO Reload the inbounds as long as the listening addresses haven't
+    // changed. The fake-DNS engine is process-wide and `DnsClient::reload`
+    // keeps the registered handle, so it needs no re-registration here.
     pub async fn reload(&self) -> Result<(), Error> {
         let config_path = if let Some(p) = self.config_path.as_ref() {
             p
@@ -444,6 +452,48 @@ pub struct StartOptions {
     pub runtime_opt: RuntimeOption,
 }
 
+/// Builds the single process-wide fake-DNS engine.
+///
+/// The engine is shared by the tun inbound's sniffer (`generate_fake_response`)
+/// and the dns client's `fakedns` server form (`lookup_or_allocate`), so a fake
+/// IP allocated by one is always understood by the other.
+///
+/// Its construction parameters are derived from the only configured source the
+/// tun inbound ever had: the first `tun` inbound's `fakeDnsInclude` /
+/// `fakeDnsExclude` lists (which are also mutually exclusive, matching the
+/// validation the tun itself used to perform). There is exactly one engine, so
+/// when several tun inbounds are configured only the first one's filters can be
+/// honoured. With no tun inbound, or with one that configures neither list, the
+/// engine defaults to `Include` with no filters: it accepts no domain, which is
+/// the old "no fake-DNS engine" behaviour for the sniffer. The `fakedns` server
+/// form does not consult the filters -- `FakeDns::lookup_or_allocate` allocates
+/// for every domain -- so it keeps working under that default. The fake-IP
+/// range is fixed inside the engine (198.18.0.0/16) and is not configurable.
+fn new_fake_dns(inbounds: &[config::Inbound]) -> anyhow::Result<Arc<FakeDns>> {
+    let mut mode = FakeDnsMode::Include;
+    let mut filters = Vec::new();
+    for inbound in inbounds {
+        if inbound.protocol != "tun" {
+            continue;
+        }
+        let settings = config::TunInboundSettings::parse_from_bytes(&inbound.settings)?;
+        if !settings.fake_dns_exclude.is_empty() && !settings.fake_dns_include.is_empty() {
+            return Err(anyhow!(
+                "fake DNS run in either include mode or exclude mode"
+            ));
+        }
+        if !settings.fake_dns_include.is_empty() {
+            mode = FakeDnsMode::Include;
+            filters = settings.fake_dns_include;
+        } else if !settings.fake_dns_exclude.is_empty() {
+            mode = FakeDnsMode::Exclude;
+            filters = settings.fake_dns_exclude;
+        }
+        break;
+    }
+    Ok(Arc::new(FakeDns::new(mode, filters)))
+}
+
 pub fn start(rt_id: RuntimeId, opts: StartOptions) -> Result<(), Error> {
     #[cfg(debug_assertions)]
     info!("start with options: {:#?}", opts);
@@ -470,6 +520,12 @@ pub fn start(rt_id: RuntimeId, opts: StartOptions) -> Result<(), Error> {
     let mut tasks: Vec<Runner> = Vec::new();
     let mut runners = Vec::new();
 
+    // The single process-wide fake-DNS engine, constructed before the dns
+    // client and registered with it below so the `fakedns` server form can
+    // resolve, and before the inbound manager so the tun inbound's sniffer
+    // shares the very same handle.
+    let fake_dns = new_fake_dns(&config.inbounds).map_err(Error::Config)?;
+
     let dns_client = Arc::new(RwLock::new(
         DnsClient::new(&config.dns).map_err(Error::Config)?,
     ));
@@ -491,16 +547,16 @@ pub fn start(rt_id: RuntimeId, opts: StartOptions) -> Result<(), Error> {
 
     let dispatcher_weak = Arc::downgrade(&dispatcher);
     let dns_client_cloned = dns_client.clone();
+    let fake_dns_cloned = fake_dns.clone();
     rt.block_on(async move {
-        dns_client_cloned
-            .write()
-            .await
-            .replace_dispatcher(dispatcher_weak);
+        let mut dns_client = dns_client_cloned.write().await;
+        dns_client.replace_dispatcher(dispatcher_weak);
+        dns_client.replace_fakedns(fake_dns_cloned);
     });
 
     let nat_manager = Arc::new(NatManager::new(dispatcher.clone()));
-    let inbound_manager =
-        InboundManager::new(&config.inbounds, dispatcher, nat_manager).map_err(Error::Config)?;
+    let inbound_manager = InboundManager::new(&config.inbounds, dispatcher, nat_manager, fake_dns)
+        .map_err(Error::Config)?;
     let mut inbound_net_runners = inbound_manager
         .get_network_runners()
         .map_err(Error::Config)?;
@@ -552,7 +608,9 @@ pub fn start(rt_id: RuntimeId, opts: StartOptions) -> Result<(), Error> {
 
     #[cfg(feature = "inbound-tproxy")]
     {
-        let mut tproxy_runners = inbound_manager.get_tproxy_runners().map_err(Error::Config)?;
+        let mut tproxy_runners = inbound_manager
+            .get_tproxy_runners()
+            .map_err(Error::Config)?;
         runners.append(&mut tproxy_runners);
     }
 
