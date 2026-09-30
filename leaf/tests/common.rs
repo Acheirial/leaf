@@ -587,11 +587,7 @@ fn transfering_reliability(
             }))
             .is_ok());
     }
-    match res {
-        Ok(Ok(_)) => (),
-        Ok(Err(e)) => return Err(e),
-        Err(e) => return Err(e),
-    }
+    res?;
 
     // TCP downlink
     let listener = rt
@@ -699,11 +695,7 @@ fn transfering_reliability(
             }))
             .is_ok());
     }
-    match res {
-        Ok(Ok(_)) => (),
-        Ok(Err(e)) => return Err(e),
-        Err(e) => return Err(e),
-    }
+    res?;
 
     // The scenarios from here on drive datagrams through the chain.
     if !udp {
@@ -847,11 +839,7 @@ fn transfering_reliability(
             }))
             .is_ok());
     }
-    match res {
-        Ok(Ok(_)) => (),
-        Ok(Err(e)) => return Err(e),
-        Err(e) => return Err(e),
-    }
+    res?;
 
     // UDP downlink
     let socket = rt
@@ -997,11 +985,8 @@ fn transfering_reliability(
             }))
             .is_ok());
     }
-    match res {
-        Ok(Ok(_)) => Ok(()),
-        Ok(Err(e)) => Err(e),
-        Err(e) => Err(e),
-    }
+    res?;
+    Ok(())
 }
 
 // Runs multiple leaf instances, thereafter a socks request will be sent to the
