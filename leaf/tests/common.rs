@@ -567,7 +567,7 @@ fn transfering_reliability(
         // Bounded, because a scenario that waits forever tells the CI nothing
         // and takes every test behind it down with it.
         match timeout(
-            Duration::from_secs(120),
+            Duration::from_secs(30),
             rt.spawn(futures::future::try_join_all(futs)),
         )
         .await
@@ -675,7 +675,7 @@ fn transfering_reliability(
         // Bounded, because a scenario that waits forever tells the CI nothing
         // and takes every test behind it down with it.
         match timeout(
-            Duration::from_secs(120),
+            Duration::from_secs(30),
             rt.spawn(futures::future::try_join_all(futs)),
         )
         .await
@@ -819,7 +819,7 @@ fn transfering_reliability(
         // Bounded, because a scenario that waits forever tells the CI nothing
         // and takes every test behind it down with it.
         match timeout(
-            Duration::from_secs(120),
+            Duration::from_secs(30),
             rt.spawn(futures::future::try_join_all(futs)),
         )
         .await
@@ -965,7 +965,7 @@ fn transfering_reliability(
         // Bounded, because a scenario that waits forever tells the CI nothing
         // and takes every test behind it down with it.
         match timeout(
-            Duration::from_secs(120),
+            Duration::from_secs(30),
             rt.spawn(futures::future::try_join_all(futs)),
         )
         .await
