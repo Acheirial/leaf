@@ -813,10 +813,18 @@ impl InboundStreamHandler for Handler {
         tracing::trace!("handling inbound stream");
         #[cfg(feature = "rustls-tls")]
         {
-            Ok(InboundTransport::Stream(
-                Box::new(self.acceptor.accept(stream).await?),
-                sess,
-            ))
+            let tls = self.acceptor.accept(stream).await?;
+            let mut sess = sess;
+            {
+                // The outer connection state is what VLESS fallbacks select on;
+                // it is available as soon as the handshake completes.
+                let (_, conn) = tls.get_ref();
+                sess.outer_sni = conn.server_name().map(|name| name.to_ascii_lowercase());
+                sess.outer_alpn = conn
+                    .alpn_protocol()
+                    .map(|alpn| String::from_utf8_lossy(alpn).into_owned());
+            }
+            Ok(InboundTransport::Stream(Box::new(tls), sess))
         }
 
         #[cfg(all(not(feature = "rustls-tls"), feature = "openssl-tls"))]
