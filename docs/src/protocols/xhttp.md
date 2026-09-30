@@ -70,9 +70,12 @@ Validation errors are startup-fatal: `headers` may not contain `host`,
 `packet-up`, `uplinkDataPlacement` may be `cookie`/`header` only in `packet-up`,
 and `maxConnections` and `maxConcurrency` are mutually exclusive.
 
-Padding is generated as `repeat-x`; the `tokenish` method is approximated as
-`repeat-x` because hitting a compressed length would need the HPACK Huffman
-table.
+Padding is generated as `repeat-x`. `tokenish` padding is *validated* exactly
+as the reference does, by the HPACK Huffman-encoded length of the value (the
+static RFC 7541 table is embedded rather than pulling in an HPACK library), so a
+reference `tokenish` client is accepted. Generation still emits `repeat-x`:
+`X` has an 8-bit Huffman code, so its encoded length equals its raw length and
+also satisfies `tokenish`.
 
 ### Limitations
 
@@ -86,8 +89,28 @@ table.
   `hMaxReusableSecs` or `hKeepAlivePeriod` to act on.
 - `downloadSettings` and `maxUploadSize` are accepted but ignored (above).
 - The in-process session table holds at most `MAX_SESSIONS = 4096` sessions
-  (oldest evicted), and the `packet-up` reassembly queue is bounded by
-  `scMaxBufferedPosts`.
+  (oldest evicted). A session whose downlink GET has not connected is reaped
+  after 30 s (the reference's TTL, `hub.go` `upsertSession`), so a POST-only
+  session cannot pin its upload channel indefinitely. The `packet-up`
+  reassembly queue is bounded by `scMaxBufferedPosts`.
+- **Remaining divergences from the reference**, none of which affect HTTP/1.1
+  framing or ordinary traffic: `OPTIONS` is not special-cased and no
+  `Access-Control-*` headers are ever emitted, where the reference answers a
+  CORS preflight with `200` (`hub.go` `requestHandler.ServeHTTP` and
+  `WriteResponseHeader`, `config.go:99`); a `stream-up` POST gets no periodic
+  padding heartbeats (`hub.go` `scStreamUpServerSecs`); response padding is
+  emitted only on the downlink response and only for the `header`,
+  `queryInHeader` and `cookie` placements, where the reference also pads POST
+  responses (`hub.go` `ServeHTTP` calls `ApplyXPaddingToResponse` for every
+  method); the client
+  percent-encodes query values with its own encoder rather than Go's
+  `url.Values.Encode()`, which differs byte-for-byte for characters outside the
+  unreserved set (both ends still decode the same value for the common cases);
+  session ids are drawn from the `rand` crate's thread RNG rather than
+  `crypto/rand`, and a non-empty `sessionIDTable` with no positive
+  `sessionIDLength` is a startup error here where the reference silently falls
+  back to a v4 UUID (`config.go` `GenerateSessionID`); and `downloadSettings`
+  and the `xmux` defaults are parsed but not applied.
 
 ### Inbound example
 

@@ -11,6 +11,7 @@ use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -36,6 +37,14 @@ use super::session::{DropNotifyReader, Packet, Session as XhttpSession, UploadQu
 /// Sessions that out-of-order uploads and a not-yet-arrived downlink need.
 /// Older entries are evicted once the table is this large.
 const MAX_SESSIONS: usize = 4096;
+
+/// How long a session may exist without a downlink GET before it is reaped.
+/// The reference gives every session a 30 s TTL and drops it, closing its
+/// upload queue, if `isFullyConnected` has not fired by then (`hub.go`
+/// `upsertSession`, hub.go:56-83). Without this a POST-only session would pin
+/// its channel -- up to `scMaxBufferedPosts * scMaxEachPostBytes`, ~30 MiB
+/// with the defaults -- for as long as the process lives.
+const SESSION_TTL: Duration = Duration::from_secs(30);
 
 pub struct Handler {
     config: Arc<XhttpConfig>,
@@ -69,6 +78,28 @@ impl Handler {
             self.config.normalized_sc_max_buffered_posts(),
         ));
         map.insert(id.to_string(), session.clone());
+        drop(map);
+
+        // Reap a session whose downlink GET never arrives, mirroring the
+        // reference's 30 s TTL (`hub.go` `upsertSession`). A downlink is
+        // "fully connected" once it has claimed the upload receiver, which
+        // `Session::rx` records: it is `None` afterwards, so no extra state is
+        // needed. Removing the map entry drops the session, releasing the
+        // channel once any in-flight POST handlers also finish.
+        let sessions = self.sessions.clone();
+        let reaper_id = id.to_string();
+        tokio::spawn(async move {
+            tokio::time::sleep(SESSION_TTL).await;
+            let session = sessions.lock().get(&reaper_id).cloned();
+            if let Some(session) = session {
+                if session.rx.lock().is_none() {
+                    // A downlink claimed the receiver; it owns the lifetime now.
+                    return;
+                }
+                sessions.lock().remove(&reaper_id);
+            }
+        });
+
         session
     }
 }

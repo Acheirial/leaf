@@ -159,6 +159,50 @@ fn hex_val(b: u8) -> Option<u8> {
     }
 }
 
+/// Upper bound on a response head read from an HTTP/1.1 peer, matching the Go
+/// HTTP client the reference dials with: an `http.Transport` with
+/// `MaxResponseHeaderBytes` unset caps the response head at 10 MiB
+/// (`net/http/transport.go` `maxHeaderResponseSize`; Xray builds the client in
+/// `splithttp/dialer.go`). The peer may be hostile or MITM'd, so its head must
+/// not be buffered without bound.
+const MAX_RESPONSE_HEAD_BYTES: usize = 10 << 20;
+
+/// Reads one `\n`-terminated line into `line`, consuming at most `budget`
+/// bytes. Unlike `read_until`, the buffer cannot grow past the budget: a line
+/// that would exceed it is rejected before its bytes are copied, so a peer
+/// that never sends a newline cannot make us allocate without bound. Returns
+/// the number of bytes appended (0 at EOF).
+async fn read_line_bounded<R: AsyncRead + Unpin>(
+    reader: &mut BufReader<R>,
+    line: &mut Vec<u8>,
+    budget: usize,
+    too_large: &str,
+) -> io::Result<usize> {
+    let mut read = 0usize;
+    loop {
+        let (take, done) = {
+            let available = reader.fill_buf().await?;
+            if available.is_empty() {
+                return Ok(read);
+            }
+            let (take, done) = match available.iter().position(|&b| b == b'\n') {
+                Some(idx) => (idx + 1, true),
+                None => (available.len(), false),
+            };
+            if read + take > budget {
+                return Err(io::Error::other(too_large));
+            }
+            line.extend_from_slice(&available[..take]);
+            (take, done)
+        };
+        reader.consume(take);
+        read += take;
+        if done {
+            return Ok(read);
+        }
+    }
+}
+
 /// Reads a request head. The body, if any, stays in the reader.
 pub async fn read_request_head<R: AsyncRead + Unpin>(
     reader: &mut BufReader<R>,
@@ -167,7 +211,13 @@ pub async fn read_request_head<R: AsyncRead + Unpin>(
     let mut total = 0usize;
     let mut line = Vec::new();
 
-    let n = reader.read_until(b'\n', &mut line).await?;
+    let n = read_line_bounded(
+        reader,
+        &mut line,
+        max_header_bytes.saturating_sub(total),
+        "request head too large",
+    )
+    .await?;
     if n == 0 {
         return Err(io::Error::new(
             io::ErrorKind::UnexpectedEof,
@@ -187,7 +237,13 @@ pub async fn read_request_head<R: AsyncRead + Unpin>(
     let mut headers = Vec::new();
     loop {
         line.clear();
-        let n = reader.read_until(b'\n', &mut line).await?;
+        let n = read_line_bounded(
+            reader,
+            &mut line,
+            max_header_bytes.saturating_sub(total),
+            "request head too large",
+        )
+        .await?;
         if n == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
@@ -195,9 +251,6 @@ pub async fn read_request_head<R: AsyncRead + Unpin>(
             ));
         }
         total += n;
-        if total > max_header_bytes {
-            return Err(io::Error::other("request head too large"));
-        }
         let head = trim_crlf(&line);
         if head.is_empty() {
             break;
@@ -224,14 +277,22 @@ pub async fn read_request_head<R: AsyncRead + Unpin>(
 pub async fn read_response_head<R: AsyncRead + Unpin>(
     reader: &mut BufReader<R>,
 ) -> io::Result<Response> {
+    let mut total = 0usize;
     let mut line = Vec::new();
-    let n = reader.read_until(b'\n', &mut line).await?;
+    let n = read_line_bounded(
+        reader,
+        &mut line,
+        MAX_RESPONSE_HEAD_BYTES,
+        "response head too large",
+    )
+    .await?;
     if n == 0 {
         return Err(io::Error::new(
             io::ErrorKind::UnexpectedEof,
             "connection closed before a response",
         ));
     }
+    total += n;
     let status_line = String::from_utf8_lossy(trim_crlf(&line)).into_owned();
     let mut parts = status_line.splitn(3, ' ');
     let _version = parts.next().unwrap_or("");
@@ -244,13 +305,20 @@ pub async fn read_response_head<R: AsyncRead + Unpin>(
     let mut headers = Vec::new();
     loop {
         line.clear();
-        let n = reader.read_until(b'\n', &mut line).await?;
+        let n = read_line_bounded(
+            reader,
+            &mut line,
+            MAX_RESPONSE_HEAD_BYTES.saturating_sub(total),
+            "response head too large",
+        )
+        .await?;
         if n == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
                 "connection closed inside the response head",
             ));
         }
+        total += n;
         let head = trim_crlf(&line);
         if head.is_empty() {
             break;
