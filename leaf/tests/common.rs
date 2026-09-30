@@ -88,8 +88,10 @@ pub fn run_leaf_instances(
     let mut leaf_rt_ids = Vec::new();
     for config in configs {
         let rt_id = NEXT_RT_ID.fetch_add(1, Ordering::Relaxed);
+        mark("instance: parsing the config");
         let config = leaf::config::from_string(&config)
             .map_err(|e| anyhow::anyhow!("parse config failed: {}", e))?;
+        mark("instance: config parsed");
         let opts = leaf::StartOptions {
             config: leaf::Config::Internal(config),
             #[cfg(feature = "auto-reload")]
@@ -101,6 +103,7 @@ pub fn run_leaf_instances(
                 panic!("start leaf failed: {}", e);
             }
         });
+        mark("instance: start spawned");
         leaf_rt_ids.push(rt_id);
     }
     Ok(leaf_rt_ids)
@@ -429,6 +432,17 @@ async fn file_hash<P: AsRef<Path>>(p: P) -> anyhow::Result<Box<[u8]>> {
     Ok(hasher.finalize().as_slice().to_owned().into_boxed_slice())
 }
 
+/// Says where a scenario got to, on the stdout the harness does not capture.
+///
+/// A test's own output is captured and only printed when the test ends, which
+/// a test that never ends never does. A thread of its own is outside that
+/// capture, so what it prints is visible while the test is still running --
+/// which is the whole point when the question is where it is stuck.
+fn mark(what: &str) {
+    let what = what.to_string();
+    let _ = std::thread::spawn(move || println!("[scenario] {}", what)).join();
+}
+
 pub fn test_data_transfering_reliability_on_configs(
     configs: Vec<String>,
     socks_addr: &str,
@@ -459,6 +473,7 @@ fn transfering_reliability(
     socks_port: u16,
     udp: bool,
 ) -> anyhow::Result<()> {
+    mark("reliability: entered");
     info!("testing data transfering reliability");
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -586,6 +601,8 @@ fn transfering_reliability(
             .is_ok());
     }
     res?;
+
+    mark("tcp uplink: finished");
 
     // TCP downlink
     let listener = rt
