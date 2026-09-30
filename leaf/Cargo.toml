@@ -48,7 +48,7 @@ default-openssl = [
     "dns-quic",
 ]
 
-rustls-tls-aws-lc = ["tokio-rustls/aws_lc_rs", "rustls/aws_lc_rs"]
+rustls-tls-aws-lc = ["tokio-rustls/aws_lc_rs", "rustls/aws_lc_rs", "reality-rustls?/aws_lc_rs"]
 rustls-tls-ring = ["tokio-rustls/ring", "rustls/ring"]
 
 quinn-ring = ["quinn/rustls-ring", "quinn/runtime-tokio"]

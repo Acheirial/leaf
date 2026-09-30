@@ -78,9 +78,11 @@ to the listener's accept timeout.
 
 - TLS 1.3 only for authentication; TLS 1.2 ClientHellos take the steal path.
 - Key exchange limited to X25519 and X25519MLKEM768.
-- X25519MLKEM768 is not required: leaf's own outbound offers only a plain
-  X25519 share, so a ClientHello with just that share still authenticates.
-  (Xray's server rejects it — it requires the hybrid share.)
+- X25519MLKEM768 is not required to *authenticate*: leaf's inbound accepts a
+  ClientHello carrying only a plain X25519 share, so leaf-to-leaf still works
+  even from a `default-ring` build. Xray's server rejects such a ClientHello —
+  it requires the hybrid share before any plain X25519 one — and leaf's outbound
+  mirrors that ordering (see Outbound below).
 - One static embedded certificate serves every `serverNames` entry.
 - No `target` round-robin: only `target[0]` is ever consulted.
 - `xver` applies to the steal path only; authenticated clients never get a PROXY
@@ -120,6 +122,22 @@ A server certificate that does not carry a matching REALITY HMAC aborts the
 handshake before any application data is sent: unlike a plain TLS client, the
 outbound never falls back to public-root validation, so a non-REALITY peer
 (e.g. a MITM or a redirected connection) cannot be mistaken for the server.
+
+### ClientHello key exchange
+
+leaf's outbound offers `X25519MLKEM768` as its first key share, immediately
+followed by a plain `X25519` share that reuses the hybrid's X25519 key — the
+ordering Xray/uTLS uses, and the ordering an Xray/REALITY server requires
+(`reality-ref/tls.go:216-236` rejects a ClientHello whose plain `X25519` share is
+not preceded by the hybrid). Both the REALITY `AuthKey` ECDH and, when the server
+selects it, the TLS key exchange itself use that same X25519 key pair.
+
+This needs the `default-aws-lc` feature (leaf's default), whose aws-lc-rs
+provider supplies ML-KEM-768. Under `default-ring` no ML-KEM is available, so the
+outbound can offer only a plain `X25519` share: it still connects to another leaf
+inbound, but an Xray/REALITY server treats it as a probe and forwards it to the
+masquerade site. leaf logs a warning on the first such connection. Build with
+`default-aws-lc` (and without `default-ring`) for Xray interoperability.
 
 ```yaml
 outbounds:

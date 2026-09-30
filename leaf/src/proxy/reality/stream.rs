@@ -1,7 +1,13 @@
 use reality::{RealityConnectionState, X25519RealityGroup};
+#[cfg(feature = "rustls-tls-aws-lc")]
+use reality_rustls::crypto::aws_lc_rs::{default_provider, kx_group::MLKEM768};
+#[cfg(not(feature = "rustls-tls-aws-lc"))]
 use reality_rustls::crypto::ring::default_provider;
+#[cfg(feature = "rustls-tls-aws-lc")]
+use reality_rustls::crypto::{ActiveKeyExchange, SharedSecret};
+use reality_rustls::crypto::{CryptoProvider, SupportedKxGroup};
 use reality_rustls::pki_types::ServerName;
-use reality_rustls::{ClientConfig, ClientConnection};
+use reality_rustls::{ClientConfig, ClientConnection, NamedGroup};
 use std::io::{ErrorKind, Read, Write};
 use std::pin::Pin;
 use std::sync::Arc;
@@ -65,18 +71,159 @@ impl reality_rustls::client::danger::ServerCertVerifier for FailClosedVerifier {
     }
 }
 
-pub fn create_reality_provider() -> Arc<reality_rustls::crypto::CryptoProvider> {
+/// Length of the ML-KEM-768 ciphertext, the first element of an
+/// `X25519MLKEM768` *server* key share. (The client sends an encapsulation key
+/// of 1184 bytes; the server answers with a 1088-byte ciphertext.)
+#[cfg(feature = "rustls-tls-aws-lc")]
+const MLKEM768_CIPHERTEXT_LEN: usize = 1088;
+/// Length of the X25519 public key, the second element of an `X25519MLKEM768`
+/// key share.
+#[cfg(feature = "rustls-tls-aws-lc")]
+const X25519_PUBLIC_KEY_LEN: usize = 32;
+
+/// An `X25519MLKEM768` key exchange whose X25519 half is REALITY-capable.
+///
+/// The stock `X25519MLKEM768` group hides its X25519 secret inside the hybrid,
+/// so `ActiveKeyExchange::extract_reality_key` cannot reach it and the REALITY
+/// `AuthKey` (`X25519(client_ephemeral, server_public_key)`) cannot be derived.
+/// This group combines the stock ML-KEM-768 group with [`X25519RealityGroup`]'s
+/// X25519 key pair:
+///
+/// * the wire key share is `ML-KEM-768 encapsulation key (1184) || X25519 public
+///   key (32)`, exactly the layout `reality-ref` decodes
+///   (`reality-ref/tls.go:216-236`);
+/// * the X25519 half backs both the REALITY ECDH and, when the server selects
+///   the classical group, the TLS key exchange itself.
+///
+/// This is what makes leaf's ClientHello look like Xray's (`X25519MLKEM768`
+/// first, followed by a plain `X25519`), instead of the ring provider's lone
+/// plain `X25519` that REALITY servers reject into the steal path.
+#[cfg(feature = "rustls-tls-aws-lc")]
+#[derive(Debug)]
+struct X25519MlKem768RealityGroup;
+
+#[cfg(feature = "rustls-tls-aws-lc")]
+impl SupportedKxGroup for X25519MlKem768RealityGroup {
+    fn start(&self) -> Result<Box<dyn ActiveKeyExchange>, reality_rustls::Error> {
+        let post_quantum = MLKEM768.start()?;
+        let classical = X25519RealityGroup.start()?;
+        let mut combined_pub_key =
+            Vec::with_capacity(post_quantum.pub_key().len() + classical.pub_key().len());
+        combined_pub_key.extend_from_slice(post_quantum.pub_key());
+        combined_pub_key.extend_from_slice(classical.pub_key());
+        Ok(Box::new(ActiveX25519MlKem768Reality {
+            post_quantum,
+            classical,
+            combined_pub_key,
+        }))
+    }
+
+    fn name(&self) -> NamedGroup {
+        NamedGroup::X25519MLKEM768
+    }
+}
+
+#[cfg(feature = "rustls-tls-aws-lc")]
+struct ActiveX25519MlKem768Reality {
+    post_quantum: Box<dyn ActiveKeyExchange>,
+    classical: Box<dyn ActiveKeyExchange>,
+    combined_pub_key: Vec<u8>,
+}
+
+#[cfg(feature = "rustls-tls-aws-lc")]
+impl ActiveKeyExchange for ActiveX25519MlKem768Reality {
+    fn complete(
+        self: Box<Self>,
+        peer_pub_key: &[u8],
+    ) -> Result<SharedSecret, reality_rustls::Error> {
+        if peer_pub_key.len() != MLKEM768_CIPHERTEXT_LEN + X25519_PUBLIC_KEY_LEN {
+            return Err(reality_rustls::Error::PeerMisbehaved(
+                reality_rustls::PeerMisbehaved::InvalidKeyShare,
+            ));
+        }
+        let (post_quantum_share, classical_share) = peer_pub_key.split_at(MLKEM768_CIPHERTEXT_LEN);
+        let post_quantum_secret = self.post_quantum.complete(post_quantum_share)?;
+        let classical_secret = self.classical.complete(classical_share)?;
+        // `X25519MLKEM768` places the post-quantum element first in both the key
+        // share and the combined secret (`crypto/aws_lc_rs/pq/hybrid.rs`'s
+        // `Layout` with `post_quantum_first = true`).
+        let mut secret = Vec::with_capacity(
+            post_quantum_secret.secret_bytes().len() + classical_secret.secret_bytes().len(),
+        );
+        secret.extend_from_slice(post_quantum_secret.secret_bytes());
+        secret.extend_from_slice(classical_secret.secret_bytes());
+        Ok(SharedSecret::from(secret))
+    }
+
+    fn extract_reality_key(&self, server_pub_key: &[u8]) -> Option<Vec<u8>> {
+        self.classical.extract_reality_key(server_pub_key)
+    }
+
+    fn hybrid_component(&self) -> Option<(NamedGroup, &[u8])> {
+        Some((NamedGroup::X25519, self.classical.pub_key()))
+    }
+
+    fn complete_hybrid_component(
+        self: Box<Self>,
+        peer_pub_key: &[u8],
+    ) -> Result<SharedSecret, reality_rustls::Error> {
+        self.classical.complete(peer_pub_key)
+    }
+
+    fn pub_key(&self) -> &[u8] {
+        &self.combined_pub_key
+    }
+
+    fn group(&self) -> NamedGroup {
+        NamedGroup::X25519MLKEM768
+    }
+}
+
+/// Build the [`CryptoProvider`] for REALITY outbound connections.
+///
+/// The key exchange groups are ordered to reproduce Xray's ClientHello:
+/// `X25519MLKEM768` first, then a plain `X25519`. `reality-ref` rejects a
+/// ClientHello without an `X25519MLKEM768` key share before the optional
+/// `X25519` one (`reality-ref/tls.go:216-236`), so the stock ring provider's
+/// lone plain `X25519` share is routed to the steal path by Xray servers.
+///
+/// With the `default-aws-lc` feature (leaf's default) the aws-lc-rs provider
+/// supplies ML-KEM-768 and the hybrid is offered. The `default-ring` provider
+/// has no ML-KEM at all, so REALITY outbound then cannot interoperate with an
+/// Xray/REALITY server — it still works leaf-to-leaf, because leaf's inbound
+/// deliberately accepts a lone plain `X25519` share (see
+/// `proxy::reality::inbound::stream`). That degradation is reported below and
+/// documented in `docs/src/protocols/reality.md`.
+pub fn create_reality_provider() -> Arc<CryptoProvider> {
     let mut provider = default_provider();
-    let mut new_kx_groups = vec![];
+    let mut kx_groups: Vec<&'static dyn SupportedKxGroup> = Vec::new();
+    #[cfg(feature = "rustls-tls-aws-lc")]
+    kx_groups.push(&X25519MlKem768RealityGroup);
+    kx_groups.push(&X25519RealityGroup);
     for group in provider.kx_groups.iter() {
-        if group.name() == reality_rustls::NamedGroup::X25519 {
-            new_kx_groups
-                .push(&X25519RealityGroup as &'static dyn reality_rustls::crypto::SupportedKxGroup);
-        } else {
-            new_kx_groups.push(*group);
+        match group.name() {
+            // Replaced above with the REALITY-aware variant.
+            NamedGroup::X25519 => {}
+            #[cfg(feature = "rustls-tls-aws-lc")]
+            NamedGroup::X25519MLKEM768 => {}
+            _ => kx_groups.push(*group),
         }
     }
-    provider.kx_groups = new_kx_groups;
+
+    #[cfg(not(feature = "rustls-tls-aws-lc"))]
+    {
+        static WARN_ONCE: std::sync::Once = std::sync::Once::new();
+        WARN_ONCE.call_once(|| {
+            tracing::warn!(
+                "REALITY outbound was built without the `default-aws-lc` feature: the ring \
+                 provider cannot offer an X25519MLKEM768 key share, so an Xray/REALITY server \
+                 treats this connection as a probe and steals it. Build with `default-aws-lc` \
+                 (and without `default-ring`) for Xray interoperability."
+            );
+        });
+    }
+
+    provider.kx_groups = kx_groups;
     Arc::new(provider)
 }
 
