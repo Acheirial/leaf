@@ -22,7 +22,7 @@ jobs:
           rust-version: stable
 
       - name: test leaf
-        run: cargo test -p leaf
+        run: cargo test -p leaf --no-fail-fast
 
   build:
     strategy:
