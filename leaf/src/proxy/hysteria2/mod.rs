@@ -165,9 +165,14 @@ pub(crate) fn transport_config(
     transport_config.max_idle_timeout(Some(quinn::IdleTimeout::from(quinn::VarInt::from_u32(
         max_idle_timeout_ms.min(u32::MAX as u64) as u32,
     ))));
-    transport_config.keep_alive_interval(Some(std::time::Duration::from_millis(
-        keep_alive_interval_ms,
-    )));
+    // An interval of zero means "keep-alive disabled". quinn honours
+    // `Some(Duration::ZERO)` literally, sending a PING for every received
+    // packet, so zero -- the server default -- must become `None`. Non-zero
+    // values are passed through unchanged.
+    transport_config.keep_alive_interval(
+        (keep_alive_interval_ms != 0)
+            .then(|| std::time::Duration::from_millis(keep_alive_interval_ms)),
+    );
     // Hysteria's UDP relay rides on QUIC datagrams.
     transport_config.datagram_send_buffer_size(2 * 1024 * 1024);
     transport_config.datagram_receive_buffer_size(Some(2 * 1024 * 1024));

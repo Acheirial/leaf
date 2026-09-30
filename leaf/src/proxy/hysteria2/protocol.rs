@@ -331,6 +331,17 @@ impl UdpMessage {
     }
 }
 
+/// A packet ID for a message that has to be fragmented.
+///
+/// The reference assigns `uint16(rand.Intn(0xFFFF)) + 1`, i.e. uniformly from
+/// `1..=u16::MAX`, and only when a message is actually split; zero is reserved
+/// for unfragmented messages. Concurrent in-flight messages of one session
+/// therefore carry distinct IDs, which is what lets the receiver's
+/// single-packet-ID deframer tell their interleaved fragments apart.
+pub fn random_packet_id() -> u16 {
+    rand::thread_rng().gen_range(1..=u16::MAX)
+}
+
 /// Splits `m` so that every fragment fits in `max_size` bytes.
 pub fn frag_udp_message(m: &UdpMessage, max_size: usize) -> Vec<UdpMessage> {
     if m.size() <= max_size {
@@ -378,6 +389,13 @@ impl Defragger {
     }
 
     /// Feeds a message; returns the message itself when it is complete.
+    ///
+    /// Mirrors the reference's `frag.Defragger.Feed`: a fragment belonging to
+    /// another packet (or declaring another fragment count) starts a fresh
+    /// reassembly, a fragment of the known packet fills its slot, and a
+    /// duplicate fragment of the known packet is dropped. State is deliberately
+    /// *not* cleared once a message is assembled, so a retransmitted fragment
+    /// is still recognised as a duplicate.
     pub fn feed(&mut self, m: UdpMessage) -> Option<UdpMessage> {
         if m.frag_count <= 1 {
             return Some(m);
@@ -385,12 +403,15 @@ impl Defragger {
         if m.frag_id >= m.frag_count {
             return None;
         }
+        let idx = m.frag_id as usize;
         if m.packet_id != self.pkt_id || m.frag_count as usize != self.frags.len() {
+            // New message, clear previous state.
             self.pkt_id = m.packet_id;
             self.frags = (0..m.frag_count).map(|_| None).collect();
-            self.count = 0;
+            self.frags[idx] = Some(m);
+            self.count = 1;
+            return None;
         }
-        let idx = m.frag_id as usize;
         if self.frags[idx].is_some() {
             return None;
         }
@@ -404,14 +425,14 @@ impl Defragger {
             let frag = frag.as_ref().expect("all fragments are present");
             data.extend_from_slice(&frag.data);
         }
-        let head = self.frags[0].take().expect("first fragment is present");
-        self.frags.iter_mut().for_each(|f| *f = None);
-        self.count = 0;
+        let head = self.frags[0].as_ref().expect("first fragment is present");
         Some(UdpMessage {
+            session_id: head.session_id,
+            packet_id: head.packet_id,
             frag_id: 0,
             frag_count: 1,
+            addr: head.addr.clone(),
             data,
-            ..head
         })
     }
 }
@@ -501,5 +522,64 @@ mod tests {
         let mut buf = vec![0u8; 8];
         buf.push(0);
         assert!(UdpMessage::parse(&buf).is_err());
+    }
+
+    fn frag(packet_id: u16, frag_id: u8, frag_count: u8, byte: u8) -> UdpMessage {
+        UdpMessage {
+            session_id: 1,
+            packet_id,
+            frag_id,
+            frag_count,
+            addr: "1.2.3.4:53".to_string(),
+            data: vec![byte; 4],
+        }
+    }
+
+    #[test]
+    fn random_packet_id_is_never_zero() {
+        // Zero is reserved for unfragmented messages.
+        for _ in 0..1000 {
+            assert_ne!(random_packet_id(), 0);
+        }
+    }
+
+    #[test]
+    fn fragmentation_keeps_the_packet_id() {
+        let m = UdpMessage {
+            session_id: 7,
+            packet_id: random_packet_id(),
+            frag_id: 0,
+            frag_count: 1,
+            addr: "1.2.3.4:53".to_string(),
+            data: vec![0u8; 4096],
+        };
+        let frags = frag_udp_message(&m, 1200);
+        assert!(frags.len() > 1);
+        for f in &frags {
+            // Every fragment of the message carries the same non-zero ID.
+            assert_eq!(f.packet_id, m.packet_id);
+            assert_eq!(f.frag_count as usize, frags.len());
+        }
+    }
+
+    #[test]
+    fn defragger_drops_duplicates_and_follows_packet_ids() {
+        let mut d = Defragger::new();
+        // Partial, then a duplicate of that fragment, then completion.
+        assert!(d.feed(frag(100, 0, 2, 0xaa)).is_none());
+        assert!(d.feed(frag(100, 0, 2, 0xaa)).is_none());
+        let done = d.feed(frag(100, 1, 2, 0xbb)).expect("reassembled");
+        let mut expected = vec![0xaa; 4];
+        expected.extend_from_slice(&[0xbb; 4]);
+        assert_eq!(done.data, expected);
+        assert_eq!(done.packet_id, 100);
+        assert_eq!(done.frag_count, 1);
+        // A retransmitted fragment of the assembled packet is a duplicate.
+        assert!(d.feed(frag(100, 1, 2, 0xbb)).is_none());
+        // A different total count resets the state even for the same ID.
+        assert!(d.feed(frag(100, 0, 3, 0xcc)).is_none());
+        assert!(d.feed(frag(100, 1, 3, 0xcc)).is_none());
+        let done = d.feed(frag(100, 2, 3, 0xcc)).expect("reassembled");
+        assert_eq!(done.data, vec![0xcc; 12]);
     }
 }

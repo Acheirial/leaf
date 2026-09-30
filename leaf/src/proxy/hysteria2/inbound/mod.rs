@@ -24,7 +24,7 @@ use futures::task::{Context, Poll};
 use futures::Stream;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
-use tracing::{debug, trace};
+use tracing::{debug, info, trace};
 
 use crate::config::Hysteria2InboundSettings;
 use crate::proxy::hysteria2::obfs::{validate_psk, ObfsRuntime};
@@ -435,6 +435,15 @@ async fn serve_request(
         return masquerade(&ctx, &req, &mut stream).await;
     }
 
+    // We can only relay UDP if the peer's transport parameters let us send
+    // QUIC datagrams. Hysteria's own client omits `max_datagram_frame_size`
+    // and relies on the reference server's non-standard
+    // `AssumePeerMaxDatagramFrameSize: 1200`; quinn has no equivalent knob
+    // (`Datagrams::max_size()` is `None` when the parameter is absent), so
+    // against such a client we advertise no UDP rather than accept an uplink
+    // whose every reply would be dropped.
+    let udp_capable = ctx.conn.max_datagram_size().is_some();
+
     if !ctx.authenticated.swap(true, Ordering::SeqCst) {
         debug!("hysteria2 inbound: client authenticated");
         if ctx.inner.server_max_tx > 0 {
@@ -443,11 +452,19 @@ async fn serve_request(
                 ctx.inner.server_max_tx
             );
         }
-        tokio::spawn(run_udp_sessions(
-            ctx.inner.clone(),
-            ctx.conn.clone(),
-            ctx.tx.clone(),
-        ));
+        if udp_capable {
+            tokio::spawn(run_udp_sessions(
+                ctx.inner.clone(),
+                ctx.conn.clone(),
+                ctx.tx.clone(),
+            ));
+        } else {
+            info!(
+                "hysteria2 inbound: peer {} did not offer QUIC datagrams \
+                 (max_datagram_frame_size absent); disabling UDP relay",
+                ctx.conn.remote_address()
+            );
+        }
     }
 
     // `Hysteria-CC-RX` is the server's own receive limit, or "auto" when the
@@ -460,7 +477,10 @@ async fn serve_request(
     let padding = String::from_utf8_lossy(&protocol::auth_response_padding()).into_owned();
     let resp = Response::builder()
         .status(StatusCode::from_u16(STATUS_AUTH_OK).expect("valid status code"))
-        .header(HEADER_UDP_ENABLED, "true")
+        .header(
+            HEADER_UDP_ENABLED,
+            if udp_capable { "true" } else { "false" },
+        )
         .header(HEADER_CC_RX, cc_rx)
         .header(HEADER_PADDING, padding)
         .body(())
@@ -538,9 +558,14 @@ async fn handle_proxied_stream(
         }
     };
 
-    // Answer before dialing: the framework performs the dial after the stream
-    // is handed over, and the client must not be left waiting for a response
-    // that can only be produced once routing has picked an outbound.
+    // Answer before dialing. This intentionally differs from the reference,
+    // which dials first and returns the dial error in the response
+    // (`core/server/server.go` `handleTCPRequest`). Here the framework performs
+    // the dial after the stream is handed over, with no channel back to the
+    // inbound, and the client must not be left waiting for a response that can
+    // only be produced once routing has picked an outbound. A failed dial
+    // therefore shows up as a stream reset after this `Connected`, not as a
+    // dial error. See `docs/src/protocols/hysteria2.md`.
     if let Err(e) = write_tcp_response(&mut send, true, "Connected").await {
         debug!("hysteria2 inbound: writing tcp response failed: {}", e);
         return;
@@ -845,6 +870,14 @@ pub(crate) async fn send_udp_message(conn: &quinn::Connection, msg: UdpMessage) 
         );
         return Ok(());
     }
+    // Fragments of concurrent messages in one session can interleave on the
+    // wire, and the receiver only tracks one packet ID at a time. Give the
+    // message a per-message ID (zero stays reserved for unfragmented ones),
+    // exactly as the reference's `sendMessageAutoFrag` does.
+    let msg = UdpMessage {
+        packet_id: protocol::random_packet_id(),
+        ..msg
+    };
     for frag in protocol::frag_udp_message(&msg, max_size) {
         buf.clear();
         frag.serialize(&mut buf);

@@ -172,6 +172,12 @@ impl AuthConn {
                 msg.size()
             )));
         }
+        // See the inbound: a fragmented message gets its own non-zero packet
+        // ID so interleaved fragments of concurrent messages stay distinct.
+        let msg = UdpMessage {
+            packet_id: protocol::random_packet_id(),
+            ..msg
+        };
         for frag in frag_udp_message(&msg, max_size) {
             buf.clear();
             frag.serialize(&mut buf);
