@@ -22,10 +22,8 @@
 //!   fingerprints.
 //! * `spiderX` — the post-handshake crawl of a "real certificate" server needs
 //!   an HTTP/2 client (Xray uses net/http + http2); this crate has no HTTP
-//!   client dependency. Moreover, a non-REALITY certificate now fails the
-//!   handshake outright (the `FailClosedVerifier` in `proxy::reality::stream`),
-//!   so there is nothing to crawl: leaf aborts before any application data, as
-//!   Xray does when `uConn.Verified` is false.
+//!   client dependency, and the fallback `WebPkiServerVerifier` already fails
+//!   the handshake on a non-REALITY certificate.
 //! * `flow` — a VLESS payload option (`xtls-rprx-vision`), not a REALITY
 //!   transport option; it belongs to the `vless` outbound.
 //!
@@ -96,24 +94,14 @@ impl OutboundStreamHandler for Handler {
         }
 
         let provider = create_reality_provider();
-        // Used only for TLS 1.3 signature verification of the REALITY dummy
-        // certificate; certificate-chain validation is never consulted because
-        // `build_rustls_config` wraps it in a fail-closed verifier (a
-        // non-REALITY certificate must abort the handshake).
         let mut roots = reality_rustls::RootCertStore::empty();
         roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-        let signature_verifier =
-            reality_rustls::client::WebPkiServerVerifier::builder(Arc::new(roots))
-                .build()
-                .map_err(|e| io::Error::other(format!("failed to build verifier: {}", e)))?;
+        let verifier = reality_rustls::client::WebPkiServerVerifier::builder(Arc::new(roots))
+            .build()
+            .map_err(|e| io::Error::other(format!("failed to build verifier: {}", e)))?;
 
-        let config = build_rustls_config(
-            provider,
-            signature_verifier,
-            public_key_bytes,
-            short_id_bytes,
-        )
-        .map_err(|e| io::Error::other(format!("failed to build rustls config: {}", e)))?;
+        let config = build_rustls_config(provider, verifier, public_key_bytes, short_id_bytes)
+            .map_err(|e| io::Error::other(format!("failed to build rustls config: {}", e)))?;
 
         let mut reality_stream = RealityStream::new(
             config,
