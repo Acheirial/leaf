@@ -26,9 +26,15 @@ jobs:
         run: |
           # Bisect aid on a throwaway branch: the suite stops at
           # test_finalmask_tcp, so run only that binary under a bound and say
-          # how it ended. 124 is the hang.
-          timeout 300 cargo test -p leaf --no-fail-fast --test test_finalmask_tcp
-          echo "finalmask-binary-exit=$?"
+          # how it ended (137 is the hang; macOS has no GNU timeout).
+          cargo test -p leaf --no-fail-fast --test test_finalmask_tcp &
+          pid=$!
+          ( sleep 300; kill -9 $pid 2>/dev/null ) &
+          watchdog=$!
+          wait $pid
+          code=$?
+          kill $watchdog 2>/dev/null
+          echo "finalmask-binary-exit=$code"
 
   build:
     strategy:
