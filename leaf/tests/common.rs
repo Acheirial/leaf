@@ -434,6 +434,31 @@ pub fn test_data_transfering_reliability_on_configs(
     socks_addr: &str,
     socks_port: u16,
 ) -> anyhow::Result<()> {
+    transfering_reliability(configs, socks_addr, socks_port, true)
+}
+
+/// Like [`test_data_transfering_reliability_on_configs`], over TCP only.
+///
+/// A chain whose payload cannot carry a datagram -- the payload half of a
+/// chain speaks what the transport inside it can carry, and a socks actor
+/// needs a server address of its own to speak UDP to -- has no UDP scenarios
+/// to run, and asking it for them only tests the absence.
+pub fn test_tcp_transfering_reliability_on_configs(
+    configs: Vec<String>,
+    socks_addr: &str,
+    socks_port: u16,
+) -> anyhow::Result<()> {
+    transfering_reliability(configs, socks_addr, socks_port, false)
+}
+
+/// Moves 2 MiB each way over TCP, as an uplink and as a downlink, comparing
+/// what arrived with what was sent, and does the same over UDP when `udp`.
+fn transfering_reliability(
+    configs: Vec<String>,
+    socks_addr: &str,
+    socks_port: u16,
+    udp: bool,
+) -> anyhow::Result<()> {
     info!("testing data transfering reliability");
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -538,7 +563,20 @@ pub fn test_data_transfering_reliability_on_configs(
     > = Vec::new();
     futs.push(Box::pin(recv_task));
     futs.push(Box::pin(send_task));
-    let res = rt.block_on(rt.spawn(futures::future::try_join_all(futs)));
+    let res = rt.block_on(async move {
+        // Bounded, because a scenario that waits forever tells the CI nothing
+        // and takes every test behind it down with it.
+        match timeout(
+            Duration::from_secs(120),
+            rt.spawn(futures::future::try_join_all(futs)),
+        )
+        .await
+        {
+            Ok(Ok(res)) => res,
+            Ok(Err(e)) => Err(anyhow::anyhow!("task join error: {}", e)),
+            Err(_) => Err(anyhow::anyhow!("the transfer scenario timed out")),
+        }
+    });
     for id in leaf_rt_ids.into_iter() {
         leaf::shutdown(id);
         assert!(rt
@@ -552,7 +590,7 @@ pub fn test_data_transfering_reliability_on_configs(
     match res {
         Ok(Ok(_)) => (),
         Ok(Err(e)) => return Err(e),
-        Err(e) => return Err(anyhow::anyhow!("task join error: {}", e)),
+        Err(e) => return Err(e),
     }
 
     // TCP downlink
@@ -637,7 +675,20 @@ pub fn test_data_transfering_reliability_on_configs(
     > = Vec::new();
     futs.push(Box::pin(recv_task));
     futs.push(Box::pin(send_task));
-    let res = rt.block_on(rt.spawn(futures::future::try_join_all(futs)));
+    let res = rt.block_on(async move {
+        // Bounded, because a scenario that waits forever tells the CI nothing
+        // and takes every test behind it down with it.
+        match timeout(
+            Duration::from_secs(120),
+            rt.spawn(futures::future::try_join_all(futs)),
+        )
+        .await
+        {
+            Ok(Ok(res)) => res,
+            Ok(Err(e)) => Err(anyhow::anyhow!("task join error: {}", e)),
+            Err(_) => Err(anyhow::anyhow!("the transfer scenario timed out")),
+        }
+    });
     for id in leaf_rt_ids.into_iter() {
         leaf::shutdown(id);
         assert!(rt
@@ -651,7 +702,12 @@ pub fn test_data_transfering_reliability_on_configs(
     match res {
         Ok(Ok(_)) => (),
         Ok(Err(e)) => return Err(e),
-        Err(e) => return Err(anyhow::anyhow!("task join error: {}", e)),
+        Err(e) => return Err(e),
+    }
+
+    // The scenarios from here on drive datagrams through the chain.
+    if !udp {
+        return Ok(());
     }
 
     // UDP uplink
@@ -767,7 +823,20 @@ pub fn test_data_transfering_reliability_on_configs(
     > = Vec::new();
     futs.push(Box::pin(recv_task));
     futs.push(Box::pin(send_task));
-    let res = rt.block_on(rt.spawn(futures::future::try_join_all(futs)));
+    let res = rt.block_on(async move {
+        // Bounded, because a scenario that waits forever tells the CI nothing
+        // and takes every test behind it down with it.
+        match timeout(
+            Duration::from_secs(120),
+            rt.spawn(futures::future::try_join_all(futs)),
+        )
+        .await
+        {
+            Ok(Ok(res)) => res,
+            Ok(Err(e)) => Err(anyhow::anyhow!("task join error: {}", e)),
+            Err(_) => Err(anyhow::anyhow!("the transfer scenario timed out")),
+        }
+    });
     for id in leaf_rt_ids.into_iter() {
         leaf::shutdown(id);
         assert!(rt
@@ -781,7 +850,7 @@ pub fn test_data_transfering_reliability_on_configs(
     match res {
         Ok(Ok(_)) => (),
         Ok(Err(e)) => return Err(e),
-        Err(e) => return Err(anyhow::anyhow!("task join error: {}", e)),
+        Err(e) => return Err(e),
     }
 
     // UDP downlink
@@ -904,7 +973,20 @@ pub fn test_data_transfering_reliability_on_configs(
     > = Vec::new();
     futs.push(Box::pin(recv_task));
     futs.push(Box::pin(send_task));
-    let res = rt.block_on(rt.spawn(futures::future::try_join_all(futs)));
+    let res = rt.block_on(async move {
+        // Bounded, because a scenario that waits forever tells the CI nothing
+        // and takes every test behind it down with it.
+        match timeout(
+            Duration::from_secs(120),
+            rt.spawn(futures::future::try_join_all(futs)),
+        )
+        .await
+        {
+            Ok(Ok(res)) => res,
+            Ok(Err(e)) => Err(anyhow::anyhow!("task join error: {}", e)),
+            Err(_) => Err(anyhow::anyhow!("the transfer scenario timed out")),
+        }
+    });
     for id in leaf_rt_ids.into_iter() {
         leaf::shutdown(id);
         assert!(rt
@@ -918,7 +1000,7 @@ pub fn test_data_transfering_reliability_on_configs(
     match res {
         Ok(Ok(_)) => Ok(()),
         Ok(Err(e)) => Err(e),
-        Err(e) => Err(anyhow::anyhow!("task join error: {}", e)),
+        Err(e) => Err(e),
     }
 }
 

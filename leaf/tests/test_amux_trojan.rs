@@ -84,5 +84,14 @@ fn test_amux_trojan() -> anyhow::Result<()> {
     let configs = vec![config1.to_string(), config2.to_string()];
     common::test_configs_tcp_only(configs.clone(), "127.0.0.1", 1086)?;
     common::test_tcp_half_close_on_configs(configs.clone(), "127.0.0.1", 1086)?;
-    common::test_data_transfering_reliability_on_configs(configs.clone(), "127.0.0.1", 1086)
+    // Over TCP only, and not because it is convenient. The payload of this
+    // chain is socks, whose UDP needs a sock5 server address of its own, while
+    // the transport under it is amux, which carries streams: a chain of the
+    // two cannot carry a datagram. The server side cannot even receive one --
+    // `app::inbound::manager` gives a chain inbound a datagram half only when
+    // its first actor has one, and amux does not. Upstream could run UDP here
+    // because the payload was trojan, which frames a datagram inside the
+    // stream it opens; the equivalent coverage, a vless payload with `cmd=2`
+    // inside a chain, is `test_vless_udp_chain.rs`.
+    common::test_tcp_transfering_reliability_on_configs(configs.clone(), "127.0.0.1", 1086)
 }

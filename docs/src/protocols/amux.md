@@ -61,3 +61,12 @@ outbounds:
 
 AMux outbounds are resolved after other outbounds, so `actors` may reference
 tags defined later in the file.
+
+## UDP in a chain
+
+A chain carries a datagram only when the payload at its end frames it inside
+what the transports under it carry, and AMux carries streams. A VLESS payload
+does that with `cmd=2`; a socks payload cannot, because its UDP needs a socks5
+server address of its own, which a chain has nowhere to put. An AMux inbound
+also has no datagram half, so a chain inbound whose first actor is AMux gets no
+UDP listener at all and could not receive one.
