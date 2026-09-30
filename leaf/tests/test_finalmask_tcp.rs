@@ -79,7 +79,7 @@ fn test_finalmask_tcp() -> anyhow::Result<()> {
     );
 
     // 2 MiB of random bytes in both directions, compared by SHA-256.
-    common::test_data_transfering_reliability_on_configs(vec![config1, config2], "127.0.0.1", 5301)
+    common::test_tcp_transfering_reliability_on_configs(vec![config1, config2], "127.0.0.1", 5301)
 }
 
 // The header-custom TCP mask runs a client/server sequence handshake before
