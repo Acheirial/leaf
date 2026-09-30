@@ -32,22 +32,26 @@ protocols and transports, routing, DNS, TLS and the API.
 | Protocol | Inbound | Outbound |
 |---|---|---|
 | HTTP | ✅ | ❌ |
+| HC | ✅ | ❌ |
 | SOCKS5 | ✅ | ✅ |
 | Shadowsocks | ❌ | ✅ |
 | Trojan | ❌ | ✅ |
 | VMess | ❌ | ✅ |
-| Vless | ❌ | ✅ |
+| VLESS | ✅ | ✅ |
+| Hysteria2 | ✅ | ✅ |
 
 ### Transports & Security
 
 | Transport | Inbound | Outbound | Notes |
 |---|---|---|---|
 | WebSocket | ✅ | ✅ | |
-| TLS | ✅ | ✅ | |
+| TLS | ✅ | ✅ | Full option list in [TLS options](docs/src/tls.md) |
 | QUIC | ✅ | ✅ | |
+| XHTTP | ✅ | ✅ | HTTP/1.1 only; no h2c/HTTP-3 |
 | AMux | ✅ | ✅ | Leaf specific multiplexing |
+| FinalMask | ✅ | ✅ | Byte masks (fragment, header-custom, sudoku, salamander, noise) |
 | Obfs | ❌ | ✅ | Simple obfuscation |
-| Reality | ❌ | ✅ | Xray Reality |
+| Reality | ✅ | ✅ | Xray Reality; inbound authenticates and falls back to a real site |
 | MPTP | ✅ | ✅ | Multi-path Transport Protocol (Aggregation) ([Architecture](docs/src/mptp_architecture.md), [Usage](docs/src/mptp_usage.md)) |
 
 ### Traffic Control
@@ -63,6 +67,13 @@ protocols and transports, routing, DNS, TLS and the API.
 | Mechanism | Inbound | Outbound | Notes |
 |---|---|---|---|
 | TUN | ✅ | ❌ | Linux, macOS, Windows, iOS, Android; lwip, smoltcp |
+| TPROXY | ⚠️ Linux only | ❌ | Original-destination recovery via iptables/nftables |
+
+### Name resolution
+
+| Feature | Notes |
+|---|---|
+| DNS | Xray-aligned client: UDP, TCP, DoH (h2/h2c) and DNS-over-QUIC, hosts overrides, caching and fallback; see [DNS](docs/src/dns.md) |
 
 ## Configuration
 

@@ -22,19 +22,20 @@ parsed by `DnsClient::parse_server` (`leaf/src/app/dns/client.rs`):
 | `quic+local://host[:port]` | DNS-over-QUIC | 853 |
 | `doh:domain[@bootstrap-ip]` | legacy DoH spelling, path `/dns-query` | 443 |
 | `localhost`, `system` | the OS resolver | — |
-| `fakedns` | reserved for the in-process fake-DNS engine; **rejected at load** (see below) | — |
+| `fakedns` | the in-process fake-DNS engine registered by a TUN inbound (see below) | — |
 
 A `direct:` prefix (for example `direct:1.1.1.1`) marks any of the above as
 direct, bypassing the router. Transports are feature-gated: `https://` and
 `doh:` require `dns-tls`; `quic+local://` requires `dns-quic`.
 
-**`fakedns` is not usable in this build.** The in-process `FakeDns` engine is
-created and owned by a TUN inbound, and no handle is ever handed to the DNS
-client, so a `fakedns` entry is rejected at load with the reason (the entry is
-skipped, with a warning, and if no other server remains the client fails to
-build). The documented ordering `servers: ["fakedns", "<real server>"]` is still
-safe: only the `fakedns` entry is dropped, and resolution (including
-`direct_lookup` fallback) proceeds through the real server.
+**`fakedns` resolves through the in-process engine.** A `fakedns` entry is
+accepted unconditionally and kept in the server list (it is not skipped). The
+`FakeDns` engine is created and owned by a TUN inbound, and `leaf::start` hands
+it to the DNS client, so `fakedns` answers A queries from that engine. When no
+engine is registered, the query fails with the named error
+`fakedns server is configured but no fake-DNS engine is available` and falls
+through to the remaining servers, which keeps the ordering
+`servers: ["fakedns", "<real server>"]` resolvable either way.
 
 **Not supported:** `tls://`, `h3://`, `dhcp://`, `udp+local://`, and `quic://`
 without `+local`. These produce `unsupported dns server scheme` at load time.
@@ -97,6 +98,7 @@ These are not config keys; they are environment-driven:
 | `DNS_TIMEOUT` | 4 s | Query timeout. |
 | `MAX_DNS_RETRIES` | 4 | Retry count. |
 | `DNS_DUALSTACK_DELAY_MS` | 250 ms | Delay before the second family. |
+| `PREFER_IPV6` | false | Prefer AAAA answers when ordering dual-stack results. |
 
 IPv6 is only used when the build enables it (`ENABLE_IPV6`).
 
@@ -133,11 +135,14 @@ dns:
 | `timeoutMs` | `timeout_ms` | Per-query timeout (only when `> 0`). |
 | `skipFallback` | `skip_fallback` | Exclude this server from the implicit fallback list. |
 | `finalQuery` | `final_query` | Truncate the ordered server list after this server — no fallback. |
+| `disableCache` | `disable_cache` | **Rejected** per server (global only) — see the note below. |
+| `serveStale` | `serve_stale` | **Rejected** per server (global only). |
+| `serveExpiredTTL` | `serve_expired_ttl` | **Rejected** per server (global only). |
 | `tag` | — | Overrides the global tag for this server. |
 
 `domains` entries accept a `full:` / `domain:` / `keyword:` / `regexp:` prefix
-(or a bare substring, treated as a dotless/implicit match). `regexp:` rules
-require the `regex` cargo feature.
+(or a bare rule, which is a plain case-insensitive substring match). `regexp:`
+rules require the `regex` cargo feature.
 
 > Per-server `disableCache`, `serveStale` and `serveExpiredTTL` are **rejected**
 > at load: the cache is a single global LRU keyed by host, and stale-serving is
@@ -148,8 +153,9 @@ require the `regex` cargo feature.
 ## Server selection
 
 For each query the candidate servers are ordered: system servers first gain the
-implicit local TLD rules (`local`, `localhost`, `lan`, `home.arpa`, `invalid`,
-`test`, …); explicit domain rules match in server order; a `finalQuery` server
+implicit local TLD rules (`local`, `localdomain`, `localhost`, `lan`,
+`home.arpa`, `example`, `invalid`, `test`, …); explicit domain rules match in
+server order; a `finalQuery` server
 truncates the list; the remaining non-`skipFallback` servers are appended as the
 fallback list unless `disableFallback` or `disableFallbackIfMatch` suppressed it.
 With `enableParallelQuery` set, adjacent servers that share a selection policy

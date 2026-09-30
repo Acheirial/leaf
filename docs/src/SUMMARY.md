@@ -13,6 +13,7 @@
 
 # Protocols & transports
 
+- [Protocol overview](protocols/overview.md)
 - [SOCKS](protocols/socks.md)
 - [HTTP](protocols/http.md)
 - [HC](protocols/hc.md)
@@ -21,11 +22,14 @@
 - [TLS](protocols/tls.md)
 - [WebSocket](protocols/ws.md)
 - [QUIC](protocols/quic.md)
+- [XHTTP](protocols/xhttp.md)
 - [AMux](protocols/amux.md)
 - [MPTP](protocols/mptp.md)
 - [Obfs](protocols/obfs.md)
+- [FinalMask](protocols/finalmask.md)
 - [Reality](protocols/reality.md)
 - [VLESS](protocols/vless.md)
+- [Hysteria2](protocols/hysteria2.md)
 - [VMess](protocols/vmess.md)
 - [Shadowsocks](protocols/shadowsocks.md)
 - [Trojan](protocols/trojan.md)

@@ -28,24 +28,24 @@ fn main() -> Result<(), leaf::Error> {
 ## What it provides
 
 - **Inbounds** — listeners that accept traffic from local applications or from
-  remote peers: `socks`, `http`, `hc`, `tls`, `ws`, `quic`, `amux`, `mptp`,
-  `tun` and `tproxy` (Linux-only), plus the `chain`/`cat` helpers. The `vless`
-  and `reality` directions are outbound-only in the current tree.
+  remote peers: `socks`, `http`, `hc`, `tls`, `ws`, `quic`, `xhttp`, `amux`,
+  `mptp`, `finalmask`, `hysteria2`, `vless`, `reality`, `tun` and `tproxy`
+  (Linux-only), plus the `chain`/`cat` helpers.
 - **Outbounds** — the upstream the traffic is sent through: `direct`, `drop`,
   `redirect`, `socks`, `shadowsocks`, `trojan`, `vmess`, `vless`, `obfs`, `tls`,
-  `ws`, `quic`, `reality`, `amux`, `mptp`, plus the routing groups `chain`,
-  `failover`, `static`, `tryall` and `select`.
+  `ws`, `quic`, `xhttp`, `finalmask`, `hysteria2`, `reality`, `amux`, `mptp`,
+  plus the routing groups `chain`, `failover`, `static`, `tryall` and `select`.
 - **Routing** — rule-based dispatch on domain, IP, port, network, inbound tag and
   (when enabled) process name; see [Routing](routing.md).
 - **DNS** — an Xray-aligned DNS client with UDP, TCP, DoH (h2/h2c) and DNS-over-QUIC
   transports, hosts overrides, caching and fallback; see [DNS](dns.md).
 - **TLS** — inbound and outbound TLS options; see [TLS options](tls.md). Reality
-  is an outbound-only TLS variant; see [Reality](protocols/reality.md).
+  is available in both directions; see [Reality](protocols/reality.md).
 - **API** — an optional HTTP/JSON API for runtime control; see [API](api.md).
 
 Every supported direction is listed per protocol in the
-[Protocols](protocols/socks.md) section, and the [Configuration](configuration.md)
-chapter explains how to write the config file.
+[Protocol overview](protocols/overview.md), and the
+[Configuration](configuration.md) chapter explains how to write the config file.
 
 ## Relationship to other projects
 
