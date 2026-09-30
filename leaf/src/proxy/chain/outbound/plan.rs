@@ -52,6 +52,10 @@ impl Stage {
     /// The session this actor sees.
     pub fn session(&self, sess: &Session) -> Session {
         let mut sess = sess.clone();
+        // What carries this actor is what the chain hands it. An actor that
+        // only knows how to reach an endpoint of its own has to be told, or
+        // it will dial one and leave the actors before it out of the session.
+        sess.in_chain = true;
         if let Some(next_hop) = self.next_hop.as_ref() {
             sess.destination = next_hop.clone();
             // The sniffed domains describe the destination that has just been

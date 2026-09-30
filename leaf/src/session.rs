@@ -93,6 +93,10 @@ pub struct Session {
     pub inbound_tag: String,
     /// The tag of the first outbound handler this session goes.
     pub outbound_tag: String,
+    /// Whether the session is being carried through a chain. What carries it
+    /// there is what the chain hands the actor that runs, not an endpoint the
+    /// actor dials for itself.
+    pub in_chain: bool,
     /// Optional stream ID for multiplexing transports.
     pub stream_id: Option<StreamId>,
     /// Optional source address which is forwarded via HTTP reverse proxy.
@@ -130,6 +134,7 @@ impl Clone for Session {
             destination: self.destination.clone(),
             inbound_tag: self.inbound_tag.clone(),
             outbound_tag: self.outbound_tag.clone(),
+            in_chain: self.in_chain,
             stream_id: self.stream_id,
             forwarded_source: self.forwarded_source,
             process_name: self.process_name.clone(),
@@ -155,6 +160,7 @@ impl Default for Session {
             destination: SocksAddr::any(),
             inbound_tag: "".to_string(),
             outbound_tag: "".to_string(),
+            in_chain: false,
             stream_id: None,
             forwarded_source: None,
             process_name: None,

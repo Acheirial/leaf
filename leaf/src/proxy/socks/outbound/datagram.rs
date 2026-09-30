@@ -64,11 +64,17 @@ impl OutboundDatagramHandler for Handler {
         // puts the payload in a chain at all -- dialling the endpoint named
         // here instead would bypass every actor before this one, and the
         // payload half of a chain names none.
-        if let Some(OutboundTransport::Datagram(carrier)) = transport {
-            return Ok(Box::new(Socks5Datagram {
-                inner: carrier,
-                server: self.framed_endpoint()?,
-            }));
+        //
+        // Only inside a chain: an actor reached on its own speaks to the
+        // socks5 server its settings name, association and all, and the
+        // endpoint the caller dialled for it is not what carries it.
+        if sess.in_chain {
+            if let Some(OutboundTransport::Datagram(carrier)) = transport {
+                return Ok(Box::new(Socks5Datagram {
+                    inner: carrier,
+                    server: self.framed_endpoint()?,
+                }));
+            }
         }
         // Nothing was handed to this actor, or what was handed to it is a
         // stream: this actor is the one talking to a socks5 server, which
