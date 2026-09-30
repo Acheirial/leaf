@@ -76,9 +76,17 @@ pub struct Padder {
     enabled: bool,
     user_uuid: Option<[u8; 16]>,
     /// Whether blocks are still long-padded. Xray long-pads while the outer
-    /// connection is TLS (`IsTLS`); leaf cannot see the TLS record boundary
-    /// here, so the leading blocks are long-padded and the padding becomes
-    /// short after the first block that carries content.
+    /// connection is TLS (`longPadding := w.trafficState.IsTLS`,
+    /// `Xray-core/proxy/proxy.go:364`) and unconditionally long-pads the empty
+    /// block that hides the VLESS header (`proxy.go:360`). leaf cannot see the
+    /// TLS record boundary through `ProxyStream`, so it uses the equivalent
+    /// minimal signal: the leading blocks — the empty camouflage block and the
+    /// first block that carries content — are long-padded, and the padding
+    /// becomes short afterwards. The empty camouflage block is emitted by the
+    /// outbound handler when no payload arrives within 500ms (see
+    /// `FIRST_PAYLOAD_TIMEOUT` in `vless/outbound/stream.rs`, mirroring
+    /// `Xray-core/proxy/vless/outbound/outbound.go:334-352`), reaching this
+    /// type as an empty `pad` call.
     long_padding: bool,
     testseed: [u32; 4],
 }
@@ -285,21 +293,39 @@ mod tests {
         assert_eq!(unpadder.unpad(&wire), b"hello world");
     }
 
+    /// Reads the padding length out of a vision block. Only the first block of
+    /// a connection carries the 16-byte user id before the
+    /// `[command:1][content len:2][padding len:2]` header; every later block
+    /// starts directly with that header (Xray writes the id once and then
+    /// clears it, `Xray-core/proxy/proxy.go:523-526`).
+    fn block_padding_len(block: &[u8], user_id_prefixed: bool) -> usize {
+        let off = if user_id_prefixed { 16 } else { 0 };
+        ((block[off + 3] as usize) << 8) | block[off + 4] as usize
+    }
+
     #[test]
     fn leading_blocks_are_long_padded_then_short() {
         let mut padder = Padder::new(UUID);
         // The empty camouflage block and the first payload block are
         // long-padded (>= testseed[2] - content), later blocks are not.
         let empty = padder.pad(b"");
-        let empty_pad = ((empty[19] as usize) << 8) | empty[20] as usize;
+        assert_eq!(&empty[..16], &UUID[..], "the first block carries the id");
+        let empty_pad = block_padding_len(&empty, true);
         assert!(
             empty_pad > 256,
             "empty block padding {} not long",
             empty_pad
         );
 
+        // The user id was consumed by the block above, so this block and the
+        // one after it start directly with the five-byte header.
         let first = padder.pad(b"short");
-        let first_pad = ((first[19] as usize) << 8) | first[20] as usize;
+        assert_ne!(
+            &first[..16],
+            &UUID[..],
+            "only the first block carries the id"
+        );
+        let first_pad = block_padding_len(&first, false);
         assert!(
             first_pad >= 900 - 5,
             "first block padding {} not long",
@@ -307,7 +333,7 @@ mod tests {
         );
 
         let second = padder.pad(b"short");
-        let second_pad = ((second[19] as usize) << 8) | second[20] as usize;
+        let second_pad = block_padding_len(&second, false);
         assert!(
             second_pad < 256,
             "later block padding {} not short",
