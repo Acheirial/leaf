@@ -58,6 +58,26 @@ include!("client/selector.rs");
 /// size) always fits the buffer, and the kernel cannot silently truncate it.
 const EDNS_UDP_PAYLOAD_SIZE: usize = 4096;
 
+tokio::task_local! {
+    /// Set while a name query is being carried by an outbound.
+    ///
+    /// Such a query hands its session to the dispatcher, which may pick an
+    /// outbound that has to resolve its own dial address. That lookup runs in
+    /// this task while this marker is set; if it were itself carried by an
+    /// outbound it would resolve that outbound's dial address again --
+    /// lookup -> dispatched query -> outbound dial -> lookup -- and recurse
+    /// without bound. The helpers below therefore answer a lookup that is
+    /// performed under this marker directly, from the local host, instead of
+    /// handing it to the dispatcher.
+    static ROUTED_QUERY_IN_FLIGHT: ();
+}
+
+/// Whether the current task is already carrying a name query through an
+/// outbound (see `ROUTED_QUERY_IN_FLIGHT`).
+fn routed_query_in_flight() -> bool {
+    ROUTED_QUERY_IN_FLIGHT.try_with(|_| ()).is_ok()
+}
+
 impl DnsClient {
     // ---------------------------------------------------------------- config
 
@@ -734,7 +754,9 @@ impl DnsClient {
         bootstrap_addr: SocketAddr,
         tag: &str,
     ) -> Result<AnyStream> {
-        if doh.is_direct {
+        // See `open_udp_socket`: a query resolved under `ROUTED_QUERY_IN_FLIGHT`
+        // must not be carried by an outbound.
+        if doh.is_direct || routed_query_in_flight() {
             let stream = TcpStream::connect(bootstrap_addr).await?;
             return Ok(Box::new(stream));
         }
@@ -751,8 +773,8 @@ impl DnsClient {
                     inbound_tag: tag.to_string(),
                     ..Default::default()
                 };
-                return dispatcher
-                    .dispatch_stream_outbound(sess)
+                return ROUTED_QUERY_IN_FLIGHT
+                    .scope((), dispatcher.dispatch_stream_outbound(sess))
                     .await
                     .map_err(|e| anyhow!("dispatch stream failed: {}", e));
             }
@@ -1231,6 +1253,10 @@ impl DnsClient {
         is_direct: bool,
         tag: &str,
     ) -> Result<(Box<dyn OutboundDatagram>, tracing::Span)> {
+        // A query being resolved to dial the outbound that is already carrying
+        // another query must not be carried itself. See
+        // `ROUTED_QUERY_IN_FLIGHT`.
+        let is_direct = is_direct || routed_query_in_flight();
         if is_direct {
             let socket = self.new_udp_socket(&addr).await?;
             Ok((
@@ -1251,9 +1277,11 @@ impl DnsClient {
             };
             let span = sess.span();
             if let Some(dispatcher) = dispatcher_weak.upgrade() {
-                let datagram = dispatcher
-                    .dispatch_datagram(sess)
-                    .instrument(span.clone())
+                let datagram = ROUTED_QUERY_IN_FLIGHT
+                    .scope(
+                        (),
+                        dispatcher.dispatch_datagram(sess).instrument(span.clone()),
+                    )
                     .await?;
                 Ok((datagram, span))
             } else {
@@ -1325,6 +1353,9 @@ impl DnsClient {
         is_direct: bool,
         tag: &str,
     ) -> Result<AnyStream> {
+        // See `open_udp_socket`: a query resolved under `ROUTED_QUERY_IN_FLIGHT`
+        // must not be carried by an outbound.
+        let is_direct = is_direct || routed_query_in_flight();
         if is_direct {
             return Ok(Box::new(TcpStream::connect(addr).await?));
         }
@@ -1341,8 +1372,8 @@ impl DnsClient {
                     inbound_tag: tag.to_string(),
                     ..Default::default()
                 };
-                return dispatcher
-                    .dispatch_stream_outbound(sess)
+                return ROUTED_QUERY_IN_FLIGHT
+                    .scope((), dispatcher.dispatch_stream_outbound(sess))
                     .await
                     .map_err(|e| anyhow!("dispatch stream failed: {}", e));
             }
