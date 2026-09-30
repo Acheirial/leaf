@@ -438,9 +438,12 @@ async fn file_hash<P: AsRef<Path>>(p: P) -> anyhow::Result<Box<[u8]>> {
 /// a test that never ends never does. A thread of its own is outside that
 /// capture, so what it prints is visible while the test is still running --
 /// which is the whole point when the question is where it is stuck.
+///
+/// Not joined: a diagnostic that waits on the very stdout it is reporting on
+/// would hang exactly when it has something to say.
 fn mark(what: &str) {
     let what = what.to_string();
-    let _ = std::thread::spawn(move || println!("[scenario] {}", what)).join();
+    std::thread::spawn(move || println!("[scenario] {}", what));
 }
 
 pub fn test_data_transfering_reliability_on_configs(
