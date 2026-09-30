@@ -16,35 +16,41 @@
 //! `s` belongs to the whole field, not to each bound
 //! (`Xray-core/infra/conf/vless.go:121`).
 //!
-//! # Why the record layer is not implemented
+//! # Key schedule
 //!
-//! The handshake keys are BLAKE3 derive-key outputs: Xray computes
-//! `blake3.DeriveKey(k, string(ctx), key)` (`Xray-core/proxy/vless/encryption/common.go:159`),
-//! where `ctx` is an arbitrary byte slice — the 16 random bytes of the client IV
-//! (`client.go:111`), an encrypted header (`common.go:136`), the server's
-//! pre-write random (`server.go:229`), and so on. Go's `string([]byte)` is a
-//! byte-for-byte conversion, so the derive-key *context* is binary. BLAKE3's
-//! derive-key mode hashes that context under the `DERIVE_KEY_CONTEXT` flag; the
-//! `blake3` crate only exposes it over a UTF-8 `&str` (`derive_key(&str, ..)`,
-//! `Hasher::new_derive_key(&str)`, `hazmat::hash_derive_key_context(&str)`) and
-//! its `hazmat`/`guts` primitives cannot run the flagged compression over a raw
-//! byte slice (`guts::ChunkState` is pinned to the plain-hash IV/key-0
-//! configuration). The binary context is therefore not representable with the
-//! crates this build depends on, and the AEAD key schedule cannot be reproduced;
-//! the scheme is rejected at configuration time instead of being silently
-//! downgraded.
+//! Every handshake key is a BLAKE3 derive-key output over an arbitrary
+//! *binary* context: Xray computes `blake3.DeriveKey(k, string(ctx), key)`
+//! (`Xray-core/proxy/vless/encryption/common.go:157-159`) where `ctx` is the
+//! 16 random IV bytes (`client.go:111`), an encrypted header
+//! (`common.go:136`), the server's pre-write random (`server.go:229`) or an
+//! 1120/1216-byte PFS public key. Go's `string([]byte)` is byte-for-byte, and
+//! the `blake3` crate only exposes derive-key over a UTF-8 `&str` (building a
+//! `&str` from non-UTF-8 bytes would be unsound), so the primitive lives in
+//! `blake3_derive` and is pinned to the crate's own output by its tests.
 //!
-//! Keys are base64url (no padding) encoded: a 32-byte X25519 key or a
-//! 1184-byte ML-KEM-768 encapsulation key on the client; a 32-byte X25519
-//! private key or a 64-byte ML-KEM-768 seed on the server.
+//! # Supported surface
+//!
+//! `native`, `xorpub` and `random` relay disguise, the `1rtt` client mode and
+//! the full server ticket/`seconds` grammar are implemented. Two things are
+//! deliberately *not* implemented and are reported as named errors rather than
+//! silently downgraded:
+//!
+//! * the client `0rtt` mode (the ticket cache), and
+//! * accepting a 0-RTT handshake on the server (a `length == 32` hello).
+//!
+//! Everything else fails closed: a malformed record, a mismatched key or a
+//! truncated stream aborts instead of falling back to a plaintext connection.
 
-use std::io;
-
-use crate::proxy::AnyStream;
-
+mod blake3_derive;
+mod client;
+mod common;
 mod scheme;
+mod server;
+mod stream;
 
+pub use client::ClientInstance;
 pub use scheme::{ClientScheme, ServerScheme, XorMode};
+pub use server::ServerInstance;
 
 /// Errors raised while parsing or configuring VLESS encryption. Every one of
 /// them is a configuration error: an unsupported or malformed scheme must be
@@ -57,108 +63,98 @@ pub enum EncryptionError {
     Invalid(String),
 }
 
-/// The capability this build is missing, quoted verbatim in every rejection so
-/// a misconfiguration is never mistaken for a silent downgrade.
-///
-/// Xray derives every handshake key with `blake3.DeriveKey(k, string(ctx), key)`
-/// over an arbitrary *binary* context: the 16-byte IV
-/// (`Xray-core/proxy/vless/encryption/client.go:111`), an encrypted header
-/// (`common.go:136`), the server pre-write random (`server.go:229`), and so on
-/// (`NewAEAD` in `common.go:159`, `NewCTR` in `xor.go:13`). The `blake3` crate
-/// exposes derive-key only for a UTF-8 `&str` context (`derive_key`,
-/// `Hasher::new_derive_key`, `hazmat::hash_derive_key_context`) and its
-/// `hazmat`/`guts` modules cannot run the `DERIVE_KEY_CONTEXT`-flagged hash over
-/// a raw byte slice, so those keys cannot be reproduced with the available
-/// crates.
-const UNSUPPORTED_REASON: &str = "the blake3 crate exposes BLAKE3 derive-key only for a UTF-8 \
-     `&str` context, but the reference derives every AEAD/XOR key over raw binary contexts \
-     (e.g. the 16-byte IV and the encrypted headers in proxy/vless/encryption/common.go); a \
-     raw-byte DERIVE_KEY_CONTEXT hash is not reachable through the crate's public or hazmat API";
-
-/// The client half of a VLESS encryption conversation.
-pub struct ClientInstance {
-    scheme: ClientScheme,
-}
-
-impl ClientInstance {
-    /// Parses the outbound `encryption` setting.
-    pub fn from_encryption(encryption: &str) -> anyhow::Result<Self> {
-        let scheme = ClientScheme::parse(encryption)?;
-        Err(anyhow::Error::new(EncryptionError::Unsupported(format!(
-            "the {} handshake is not implemented in this build: {}",
-            scheme_label(&scheme),
-            UNSUPPORTED_REASON
-        ))))
-    }
-
-    /// Performs the handshake and wraps `stream` in the record layer.
-    pub async fn handshake(&self, _stream: AnyStream) -> io::Result<AnyStream> {
-        Err(io::Error::other(format!(
-            "VLESS encryption handshake is not implemented: {UNSUPPORTED_REASON}"
-        )))
-    }
-}
-
-/// The server half of a VLESS encryption conversation.
-pub struct ServerInstance {
-    scheme: ServerScheme,
-}
-
-impl ServerInstance {
-    /// Parses the inbound `decryption` setting.
-    pub fn from_decryption(decryption: &str) -> anyhow::Result<Self> {
-        let scheme = ServerScheme::parse(decryption)?;
-        Err(anyhow::Error::new(EncryptionError::Unsupported(format!(
-            "the {} handshake is not implemented in this build: {}",
-            scheme_label_server(&scheme),
-            UNSUPPORTED_REASON
-        ))))
-    }
-
-    /// Performs the handshake and wraps `stream` in the record layer.
-    pub async fn handshake(&self, _stream: AnyStream) -> io::Result<AnyStream> {
-        Err(io::Error::other(format!(
-            "VLESS encryption handshake is not implemented: {UNSUPPORTED_REASON}"
-        )))
-    }
-}
-
-fn scheme_label(scheme: &ClientScheme) -> String {
-    format!("mlkem768x25519plus.{:?}.{}rtt", scheme.mode, scheme.seconds)
-}
-
-fn scheme_label_server(scheme: &ServerScheme) -> String {
-    format!("mlkem768x25519plus.{:?}", scheme.mode)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
+    use ml_kem::KeyExport;
+    use rand::{thread_rng, RngCore};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    fn key(n: usize) -> String {
-        URL_SAFE_NO_PAD.encode(vec![0x11; n])
+    fn b64(b: &[u8]) -> String {
+        URL_SAFE_NO_PAD.encode(b)
     }
 
-    /// A configured scheme must be rejected *by name*: this build cannot
-    /// reproduce Xray's binary BLAKE3 derive-key contexts with the `blake3`
-    /// crate, and the error must say so rather than silently dropping the
-    /// encryption layer.
-    #[test]
-    fn encryption_schemes_are_rejected_with_the_missing_primitive() {
-        let client = format!("mlkem768x25519plus.native.0rtt.{}", key(32));
-        let err = ClientInstance::from_encryption(&client)
-            .err()
-            .expect("the handshake is not implemented")
-            .to_string();
-        assert!(err.contains("blake3"), "{err}");
+    /// Drives a full client/server handshake over an in-process duplex and
+    /// exchanges a payload both ways. Covers the ML-KEM-768 + X25519 hybrid
+    /// key exchange, the relay chain and the record layer for every disguise
+    /// mode.
+    async fn round_trip(mode: &str) {
+        let mut rng = thread_rng();
+        let mut seed = [0u8; 64];
+        rng.fill_bytes(&mut seed);
+        let dk = ml_kem::DecapsulationKey::<ml_kem::MlKem768>::from_seed(ml_kem::Seed::from(seed));
+        let ek = dk.encapsulation_key().to_bytes();
+        let ek = ek[..].to_vec();
+        let mut xsk = [0u8; 32];
+        rng.fill_bytes(&mut xsk);
+        let xpk = x25519_dalek::x25519(xsk, x25519_dalek::X25519_BASEPOINT_BYTES);
 
-        let server = format!("mlkem768x25519plus.random.600-1200s.{}", key(32));
-        let err = ServerInstance::from_decryption(&server)
-            .err()
-            .expect("the handshake is not implemented")
-            .to_string();
-        assert!(err.contains("blake3"), "{err}");
+        let server = ServerInstance::from_decryption(&format!(
+            "mlkem768x25519plus.{mode}.0s.{}.{}",
+            b64(&seed),
+            b64(&xsk)
+        ))
+        .expect("server scheme");
+        let client = ClientInstance::from_encryption(&format!(
+            "mlkem768x25519plus.{mode}.1rtt.{}.{}",
+            b64(&ek),
+            b64(&xpk)
+        ))
+        .expect("client scheme");
+
+        let (client_io, server_io) = tokio::io::duplex(1 << 20);
+        let server_task = tokio::spawn(async move {
+            let mut s = server
+                .handshake(Box::new(server_io))
+                .await
+                .expect("server handshake");
+            let mut payload = [0u8; 7];
+            s.read_exact(&mut payload).await.expect("server read");
+            assert_eq!(&payload, b"payload");
+            s.write_all(b"ok").await.unwrap();
+            s.flush().await.unwrap();
+        });
+
+        let mut c = client
+            .handshake(Box::new(client_io))
+            .await
+            .expect("client handshake");
+        c.write_all(b"payload").await.unwrap();
+        c.flush().await.unwrap();
+        let mut got = [0u8; 2];
+        c.read_exact(&mut got).await.expect("client read");
+        assert_eq!(&got, b"ok");
+        server_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn hybrid_round_trip_native() {
+        round_trip("native").await;
+    }
+
+    #[tokio::test]
+    async fn hybrid_round_trip_xorpub() {
+        round_trip("xorpub").await;
+    }
+
+    #[tokio::test]
+    async fn hybrid_round_trip_random() {
+        round_trip("random").await;
+    }
+
+    #[tokio::test]
+    async fn client_0rtt_is_a_named_error() {
+        let mut key = [0u8; 1184];
+        key[0] = 1;
+        let err = ClientInstance::from_encryption(&format!(
+            "mlkem768x25519plus.native.0rtt.{}",
+            b64(&key)
+        ))
+        .err()
+        .expect("0rtt must be rejected")
+        .to_string();
+        assert!(err.contains("0rtt"), "{err}");
     }
 }

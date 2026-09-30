@@ -7,11 +7,11 @@
 use std::io;
 use std::time::Duration;
 
-use aes::cipher::{BlockEncrypt, KeyInit as _};
+use aes::cipher::BlockEncrypt;
 use aes_gcm::aead::{Aead as _, Payload as AesPayload};
-use aes_gcm::{Aes256Gcm, KeyInit as _};
+use aes_gcm::Aes256Gcm;
 use chacha20poly1305::aead::{Aead as _, Payload as ChachaPayload};
-use chacha20poly1305::{ChaCha20Poly1305, KeyInit as _};
+use chacha20poly1305::ChaCha20Poly1305;
 
 use super::blake3_derive::derive_key;
 
@@ -54,19 +54,27 @@ impl AeadKind {
             AeadKind::ChaCha20Poly1305
         }
     }
+
+    /// The cipher for a `useAES` flag such as the server's fallback state.
+    pub(crate) fn from_use_aes(use_aes: bool) -> Self {
+        if use_aes {
+            AeadKind::Aes256Gcm
+        } else {
+            AeadKind::ChaCha20Poly1305
+        }
+    }
 }
 
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 fn has_aes_hardware() -> bool {
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    {
-        is_x86_feature_detected!("aes") && is_x86_feature_detected!("pclmulqdq")
-    }
-    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
-    {
-        // Other backends are not probed here; ChaCha is the safe default, and
-        // the server always tries AES first before flipping.
-        false
-    }
+    is_x86_feature_detected!("aes") && is_x86_feature_detected!("pclmulqdq")
+}
+
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+fn has_aes_hardware() -> bool {
+    // Other backends are not probed here; ChaCha is the safe default, and the
+    // server always tries AES first before flipping.
+    false
 }
 
 enum Cipher {
@@ -89,11 +97,12 @@ impl Aead {
         let mut k = [0u8; 32];
         k.copy_from_slice(&derive_key(ctx, key));
         let cipher = match kind {
-            AeadKind::Aes256Gcm => {
-                Cipher::Aes(Aes256Gcm::new_from_slice(&k).expect("aes-256 key"))
-            }
+            AeadKind::Aes256Gcm => Cipher::Aes(
+                <Aes256Gcm as aes_gcm::KeyInit>::new_from_slice(&k).expect("aes-256 key"),
+            ),
             AeadKind::ChaCha20Poly1305 => Cipher::ChaCha(
-                ChaCha20Poly1305::new_from_slice(&k).expect("chacha20 key"),
+                <ChaCha20Poly1305 as chacha20poly1305::KeyInit>::new_from_slice(&k)
+                    .expect("chacha20 key"),
             ),
         };
         Aead {
@@ -213,7 +222,8 @@ impl AesCtr {
     pub(crate) fn new(key: &[u8], iv: &[u8; 16]) -> Self {
         let mut k = [0u8; 32];
         k.copy_from_slice(&derive_key(CTR_CONTEXT, key));
-        let cipher = aes::Aes256::new_from_slice(&k).expect("aes-256 key");
+        let cipher =
+            <aes::Aes256 as aes::cipher::KeyInit>::new_from_slice(&k).expect("aes-256 key");
         AesCtr {
             cipher,
             counter: u128::from_be_bytes(*iv),
@@ -332,8 +342,14 @@ pub(crate) fn create_padding(
 ) -> (usize, Vec<usize>, Vec<Duration>) {
     let default_lens = [[100i64, 111, 1111], [50, 0, 3333]];
     let default_gaps = [[75i64, 0, 111]];
-    let lens: &[[i64; 3]] = if lens.is_empty() { &default_lens } else { lens };
-    let gaps: &[[i64; 3]] = if gaps.is_empty() { &default_gaps } else { gaps };
+    // The reference only substitutes the defaults when *no* padding lengths
+    // were configured at all (`common.go:CreatPadding`); a configured length
+    // with no gap simply produces no sleeps.
+    let (lens, gaps): (&[[i64; 3]], &[[i64; 3]]) = if lens.is_empty() {
+        (&default_lens, &default_gaps)
+    } else {
+        (lens, gaps)
+    };
 
     let mut length = 0usize;
     let mut out_lens = Vec::with_capacity(lens.len());
@@ -361,6 +377,7 @@ pub(crate) fn create_padding(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aes::cipher::BlockEncrypt;
 
     #[test]
     fn header_round_trip_and_bounds() {
@@ -405,7 +422,7 @@ mod tests {
 
         let mut k = [0u8; 32];
         k.copy_from_slice(&derive_key(CTR_CONTEXT, &key));
-        let cipher = aes::Aes256::new_from_slice(&k).unwrap();
+        let cipher = <aes::Aes256 as aes::cipher::KeyInit>::new_from_slice(&k).unwrap();
         let mut expected = Vec::new();
         for block_idx in 0u128..3 {
             let counter = u128::from_be_bytes(iv).wrapping_add(block_idx);

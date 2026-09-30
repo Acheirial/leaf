@@ -3,14 +3,13 @@
 
 use std::io;
 
-use rand::{thread_rng, RngCore};
+use rand::{rngs::OsRng, RngCore};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::proxy::AnyStream;
 
 use super::common::{
-    create_padding, decode_length, encode_length, parse_padding, Aead, AeadKind, AesCtr,
-    MAX_NONCE,
+    create_padding, decode_length, encode_length, parse_padding, Aead, AeadKind, AesCtr, MAX_NONCE,
 };
 use super::scheme::{ClientScheme, XorMode};
 use super::stream::{CommonStream, XorStream};
@@ -24,7 +23,8 @@ const PFS_KEY_EXCHANGE_LEN: usize = 18 + 1184 + 32 + 16;
 const MLKEM_ENCAPSULATION_KEY_LEN: usize = 1184;
 const MLKEM_CIPHERTEXT_LEN: usize = 1088;
 const X25519_LEN: usize = 32;
-/// The server's PFS exchange record: ML-KEM ciphertext + X25519 public key + tag.
+/// The server's PFS public key: ML-KEM ciphertext + X25519 public key (the
+/// record on the wire is this plus the AEAD tag).
 const SERVER_PFS_LEN: usize = MLKEM_CIPHERTEXT_LEN + X25519_LEN;
 
 /// The client half of a VLESS encryption conversation.
@@ -81,15 +81,14 @@ impl ClientInstance {
     /// Performs the 1-RTT handshake and wraps `stream` in the record layer
     /// (`client.go:Handshake`).
     pub async fn handshake(&self, mut stream: AnyStream) -> io::Result<AnyStream> {
-        let use_aes = AeadKind::client_default();
-        let mut rng = thread_rng();
+        let kind = AeadKind::client_default();
+        let mut rng = OsRng;
 
         let iv_and_relays_length = IV_LEN + self.relays_length;
         let (padding_length, padding_lens, padding_gaps) =
             create_padding(&self.padding_lens, &self.padding_gaps);
 
-        let mut hello =
-            vec![0u8; iv_and_relays_length + PFS_KEY_EXCHANGE_LEN + padding_length];
+        let mut hello = vec![0u8; iv_and_relays_length + PFS_KEY_EXCHANGE_LEN + padding_length];
         rng.fill_bytes(&mut hello[..IV_LEN]);
         let iv: [u8; IV_LEN] = hello[..IV_LEN].try_into().unwrap();
 
@@ -117,8 +116,8 @@ impl ClientInstance {
                     let mut m = [0u8; 32];
                     rng.fill_bytes(&mut m);
                     let (ct, shared) = ek.encapsulate_deterministic(&ml_kem::B32::from(m));
-                    relays[offset..offset + index].copy_from_slice(ct.as_ref());
-                    nfs_key = shared.as_ref().to_vec();
+                    relays[offset..offset + index].copy_from_slice(&ct[..]);
+                    nfs_key = shared[..].to_vec();
                 }
                 if self.scheme.mode != XorMode::Native {
                     AesCtr::new(key, &iv).apply(&mut relays[offset..offset + index]);
@@ -138,7 +137,7 @@ impl ClientInstance {
             }
         }
 
-        let mut nfs_aead = Aead::new(&iv, &nfs_key, use_aes);
+        let mut nfs_aead = Aead::new(&iv, &nfs_key, kind);
 
         // The PFS key exchange and padding records (`client.go:126-141`).
         let base = iv_and_relays_length;
@@ -146,13 +145,13 @@ impl ClientInstance {
         nfs_aead.seal_into(&mut rec, &encode_length(PFS_KEY_EXCHANGE_LEN - 18), &[]);
         hello[base..base + rec.len()].copy_from_slice(&rec);
 
-        let (mlkem_dk, mlkem_ek) = mlkem_keypair(&mut rng)?;
+        let (mlkem_dk, mlkem_ek_bytes) = mlkem_keypair(&mut rng)?;
         let mut x_sk = [0u8; 32];
         rng.fill_bytes(&mut x_sk);
         let x_pub = x25519_dalek::x25519(x_sk, x25519_dalek::X25519_BASEPOINT_BYTES);
 
         let mut client_pfs_public = Vec::with_capacity(MLKEM_ENCAPSULATION_KEY_LEN + 32);
-        client_pfs_public.extend_from_slice(mlkem_ek.as_ref());
+        client_pfs_public.extend_from_slice(&mlkem_ek_bytes);
         client_pfs_public.extend_from_slice(&x_pub);
         let mut rec = Vec::new();
         nfs_aead.seal_into(&mut rec, &client_pfs_public, &[]);
@@ -200,20 +199,19 @@ impl ClientInstance {
         let mlkem_shared = mlkem_dk
             .decapsulate_slice(&server_pfs_public[..MLKEM_CIPHERTEXT_LEN])
             .map_err(|_| io::Error::other("VLESS encryption: bad ML-KEM ciphertext"))?;
-        let server_x: [u8; 32] = server_pfs_public
-            [MLKEM_CIPHERTEXT_LEN..MLKEM_CIPHERTEXT_LEN + 32]
+        let server_x: [u8; 32] = server_pfs_public[MLKEM_CIPHERTEXT_LEN..MLKEM_CIPHERTEXT_LEN + 32]
             .try_into()
             .unwrap();
         let x_shared = x25519_dalek::x25519(x_sk, server_x);
 
         let mut pfs_key = Vec::with_capacity(64);
-        pfs_key.extend_from_slice(mlkem_shared.as_ref());
+        pfs_key.extend_from_slice(&mlkem_shared[..]);
         pfs_key.extend_from_slice(&x_shared);
         let mut united_key = pfs_key.clone();
         united_key.extend_from_slice(&nfs_key);
 
-        let mut c_aead = Aead::new(&client_pfs_public, &united_key, use_aes);
-        let mut peer_aead = Aead::new(&server_pfs_public, &united_key, use_aes);
+        let c_aead = Aead::new(&client_pfs_public, &united_key, kind);
+        let mut peer_aead = Aead::new(&server_pfs_public, &united_key, kind);
 
         // Ticket and padding (`client.go:178-205`).
         let mut encrypted_ticket = vec![0u8; 32];
@@ -221,16 +219,14 @@ impl ClientInstance {
         let ticket = peer_aead
             .open(&encrypted_ticket, &[])
             .ok_or_else(|| io::Error::other("VLESS encryption: bad ticket"))?;
-        let _server_seconds = crate::proxy::vless::encryption::common::decode_length(&ticket[..2]);
+        let _server_seconds = decode_length(&ticket[..2]);
 
         let mut encrypted_length = vec![0u8; 18];
         stream.read_exact(&mut encrypted_length).await?;
         let decrypted_length = peer_aead
             .open(&encrypted_length, &[])
             .ok_or_else(|| io::Error::other("VLESS encryption: bad padding length"))?;
-        let padding_len = crate::proxy::vless::encryption::common::decode_length(
-            &decrypted_length[..2],
-        );
+        let padding_len = decode_length(&decrypted_length[..2]);
         if padding_len > 0 {
             let mut padding = vec![0u8; padding_len];
             stream.read_exact(&mut padding).await?;
@@ -250,7 +246,7 @@ impl ClientInstance {
 
         Ok(Box::new(CommonStream::new(
             transport,
-            use_aes,
+            kind,
             united_key,
             c_aead,
             peer_aead,
@@ -273,14 +269,12 @@ fn encapsulation_key(key: &[u8]) -> io::Result<ml_kem::EncapsulationKey<ml_kem::
 /// determinism only needs 32 uniform bytes.
 fn mlkem_keypair(
     rng: &mut impl RngCore,
-) -> io::Result<(
-    ml_kem::DecapsulationKey<ml_kem::MlKem768>,
-    ml_kem::EncapsulationKey<ml_kem::MlKem768>,
-)> {
+) -> io::Result<(ml_kem::DecapsulationKey<ml_kem::MlKem768>, Vec<u8>)> {
     let mut seed = [0u8; 64];
     rng.fill_bytes(&mut seed);
     let seed = ml_kem::Seed::from(seed);
     let dk = ml_kem::DecapsulationKey::<ml_kem::MlKem768>::from_seed(seed);
-    let ek = dk.encapsulation_key().clone();
+    let ek = dk.encapsulation_key().to_bytes();
+    let ek = ek[..].to_vec();
     Ok((dk, ek))
 }

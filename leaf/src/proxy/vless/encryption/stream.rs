@@ -289,40 +289,37 @@ impl<S> XorStream<S> {
             };
             let need = RECORD_HEADER_LEN - have;
             if data.len() - pos < need {
-                // The header spans this write; XOR what we have and remember
-                // the partial header so the next call can decode it.
-                let mut header = if inbound {
-                    std::mem::take(&mut self.in_header)
-                } else {
-                    std::mem::take(&mut self.out_header)
-                };
-                header.extend_from_slice(&data[pos..]);
+                // The header spans this write. The writer accumulates the
+                // plaintext header *before* XORing it; the reader XORs first
+                // and accumulates the recovered plaintext.
                 if inbound {
                     self.in_ctr.apply(&mut data[pos..]);
-                    self.in_header = header;
+                    self.in_header.extend_from_slice(&data[pos..]);
                 } else {
+                    self.out_header.extend_from_slice(&data[pos..]);
                     self.out_ctr.apply(&mut data[pos..]);
-                    self.out_header = header;
                 }
                 break;
             }
-            // Reconstruct the plaintext header and decode the body length.
+            // Reconstruct the *plaintext* header and decode the body length.
             let mut full = [0u8; RECORD_HEADER_LEN];
-            let stored = if inbound {
-                let h = std::mem::take(&mut self.in_header);
-                h
+            if inbound {
+                // `in_header` already holds the recovered plaintext prefix.
+                full[..have].copy_from_slice(&self.in_header);
+                self.in_ctr.apply(&mut data[pos..pos + need]);
+                full[have..].copy_from_slice(&data[pos..pos + need]);
+                self.in_header.clear();
             } else {
-                let h = std::mem::take(&mut self.out_header);
-                h
-            };
-            full[..stored.len()].copy_from_slice(&stored);
-            full[stored.len()..].copy_from_slice(&data[pos..pos + need]);
+                // `out_header` holds the not-yet-encrypted plaintext prefix.
+                full[..have].copy_from_slice(&self.out_header);
+                full[have..].copy_from_slice(&data[pos..pos + need]);
+                self.out_header.clear();
+                self.out_ctr.apply(&mut data[pos..pos + need]);
+            }
             let body_len = decode_header(&full).unwrap_or(0);
             if inbound {
-                self.in_ctr.apply(&mut data[pos..pos + need]);
                 self.in_skip = body_len;
             } else {
-                self.out_ctr.apply(&mut data[pos..pos + need]);
                 self.out_skip = body_len;
             }
             pos += need;
@@ -398,5 +395,93 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for XorStream<S> {
         let me = self.get_mut();
         ready!(me.poll_flush_out(cx))?;
         Pin::new(&mut me.inner).poll_shutdown(cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::common::{Aead, AeadKind};
+    use super::*;
+    use tokio::io::{duplex, AsyncReadExt, AsyncWriteExt};
+
+    const KEY: &[u8] = b"united key material for the record layer";
+    const CTX: &[u8] = b"shared pfs context";
+
+    fn stream<S>(inner: S, key: &[u8], ctx: &[u8]) -> CommonStream<S> {
+        CommonStream::new(
+            inner,
+            AeadKind::Aes256Gcm,
+            key.to_vec(),
+            Aead::new(ctx, key, AeadKind::Aes256Gcm),
+            Aead::new(ctx, key, AeadKind::Aes256Gcm),
+            Vec::new(),
+        )
+    }
+
+    #[tokio::test]
+    async fn record_round_trip() {
+        let (a, b) = duplex(1 << 16);
+        let mut writer = stream(a, KEY, CTX);
+        let mut reader = stream(b, KEY, CTX);
+        // Crosses the 8192-byte record boundary.
+        let payload: Vec<u8> = (0..20000).map(|i| (i % 251) as u8).collect();
+        writer.write_all(&payload).await.unwrap();
+        writer.flush().await.unwrap();
+        let mut got = vec![0u8; payload.len()];
+        reader.read_exact(&mut got).await.unwrap();
+        assert_eq!(got, payload);
+    }
+
+    #[tokio::test]
+    async fn record_round_trip_over_xor() {
+        // The `random` mode puts a header-XORing `XorStream` under the record
+        // layer; this exercises that exact composition.
+        let iv = [1u8; 16];
+        let ticket = [2u8; 16];
+        let (a, b) = duplex(1 << 16);
+        let writer_xor = XorStream::new(a, AesCtr::new(KEY, &iv), AesCtr::new(KEY, &ticket));
+        let reader_xor = XorStream::new(b, AesCtr::new(KEY, &ticket), AesCtr::new(KEY, &iv));
+        let mut writer = stream(writer_xor, KEY, CTX);
+        let mut reader = stream(reader_xor, KEY, CTX);
+        let payload: Vec<u8> = (0..20000).map(|i| (i % 251) as u8).collect();
+        writer.write_all(&payload).await.unwrap();
+        writer.flush().await.unwrap();
+        let mut got = vec![0u8; payload.len()];
+        reader.read_exact(&mut got).await.unwrap();
+        assert_eq!(got, payload);
+    }
+
+    #[tokio::test]
+    async fn wrong_key_record_is_rejected() {
+        let (a, b) = duplex(1 << 16);
+        let mut writer = stream(a, KEY, CTX);
+        let mut reader = stream(b, b"a different key material!", CTX);
+        writer.write_all(b"top secret").await.unwrap();
+        writer.flush().await.unwrap();
+        let mut got = [0u8; 10];
+        assert!(reader.read_exact(&mut got).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn truncated_record_is_rejected() {
+        // Capture a valid record, then feed all but its last byte to a reader.
+        let (a, mut raw) = duplex(1 << 16);
+        let mut writer = stream(a, KEY, CTX);
+        writer.write_all(b"a complete record").await.unwrap();
+        writer.flush().await.unwrap();
+        drop(writer);
+        let mut record = Vec::new();
+        raw.read_to_end(&mut record).await.unwrap();
+        assert!(record.len() > 16);
+
+        let (r_in, mut r_out) = duplex(1 << 16);
+        let truncated = record[..record.len() - 1].to_vec();
+        tokio::spawn(async move {
+            let _ = r_out.write_all(&truncated).await;
+            let _ = r_out.shutdown().await;
+        });
+        let mut reader = stream(r_in, KEY, CTX);
+        let mut got = [0u8; 17];
+        assert!(reader.read_exact(&mut got).await.is_err());
     }
 }

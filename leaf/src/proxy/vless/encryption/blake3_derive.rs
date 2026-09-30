@@ -89,7 +89,13 @@ fn round(state: &mut [u32; 16], msg: &[u32; 16], r: usize) {
 }
 
 /// The BLAKE3 compression function, returning the full 16-word extended output.
-fn compress(cv: &[u32; 8], block: &[u32; 16], counter: u64, block_len: u32, flags: u32) -> [u32; 16] {
+fn compress(
+    cv: &[u32; 8],
+    block: &[u32; 16],
+    counter: u64,
+    block_len: u32,
+    flags: u32,
+) -> [u32; 16] {
     let mut state = [
         cv[0],
         cv[1],
@@ -327,7 +333,8 @@ mod tests {
                 let ours = derive_key(context.as_bytes(), &material);
                 let theirs = blake3::derive_key(context, &material);
                 assert_eq!(
-                    ours, theirs,
+                    ours,
+                    theirs,
                     "context len {} material len {}",
                     context.len(),
                     material_len
@@ -342,7 +349,10 @@ mod tests {
     fn matches_hasher_new_derive_key() {
         for (context, material) in [
             ("VLESS", &b"hello world"[..]),
-            ("some longer ascii context that is definitely over one block long ............", &b""[..]),
+            (
+                "some longer ascii context that is definitely over one block long ............",
+                &b""[..],
+            ),
         ] {
             let mut hasher = blake3::Hasher::new_derive_key(context);
             hasher.update(material);
