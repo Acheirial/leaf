@@ -126,10 +126,17 @@ impl ServerScheme {
     }
 }
 
-/// Server seconds are `N[s]` or `N[s]-M[s]`.
+/// Server seconds follow Xray's grammar exactly. `Xray-core/infra/conf/vless.go:121`
+/// evaluates `strings.SplitN(strings.TrimSuffix(field, "s"), "-", 2)`, i.e. a
+/// single trailing `s` belongs to the *whole* field and is stripped before the
+/// field is split on its first `-`. Valid fields are therefore `N`, `Ns`, `N-M`
+/// and `N-Ms` — a per-bound suffix such as `Ns-M` or `Ns-Ms` is rejected by
+/// `strconv.Atoi` and must be rejected here too. A single value leaves `to` at
+/// 0; Xray's server then picks a random value in `[from*0.5, from)` (see
+/// `server.go`), so it is not a fixed `from == to` range.
 fn parse_seconds(s: &str) -> Result<(i64, i64), EncryptionError> {
-    let s = s.strip_suffix('s').unwrap_or(s);
-    let mut it = s.splitn(2, '-');
+    let trimmed = s.strip_suffix('s').unwrap_or(s);
+    let mut it = trimmed.splitn(2, '-');
     let from = it
         .next()
         .and_then(|v| v.parse::<i64>().ok())
@@ -200,8 +207,10 @@ mod tests {
 
     #[test]
     fn server_scheme_with_padding_and_two_keys() {
+        // `600-1200s` is the range form the reference accepts: the trailing `s`
+        // belongs to the whole field (`infra/conf/vless.go:121`).
         let s = format!(
-            "mlkem768x25519plus.random.600s-1200s.100-111-1111.50-0-3333.{}.{}",
+            "mlkem768x25519plus.random.600-1200s.100-111-1111.50-0-3333.{}.{}",
             key(X25519_KEY),
             key(MLKEM_PRIVATE_SEED)
         );
@@ -212,6 +221,35 @@ mod tests {
         assert_eq!(scheme.keys.len(), 2);
         assert_eq!(scheme.keys[0].len(), X25519_KEY);
         assert_eq!(scheme.keys[1].len(), MLKEM_PRIVATE_SEED);
+    }
+
+    /// The seconds field is parsed exactly as Xray does it
+    /// (`Xray-core/infra/conf/vless.go:121`): a single trailing `s` is stripped
+    /// from the *whole* field, then the field is split on its first `-`.
+    #[test]
+    fn server_seconds_grammar() {
+        let parse = |seconds: &str| {
+            ServerScheme::parse(&format!(
+                "mlkem768x25519plus.native.{seconds}.{}",
+                key(X25519_KEY)
+            ))
+            .map(|scheme| (scheme.seconds_from, scheme.seconds_to))
+        };
+
+        assert_eq!(parse("600").unwrap(), (600, 0));
+        assert_eq!(parse("600s").unwrap(), (600, 0));
+        assert_eq!(parse("600-1200").unwrap(), (600, 1200));
+        assert_eq!(parse("600-1200s").unwrap(), (600, 1200));
+
+        // Only the whole field may carry the `s` suffix; `strconv.Atoi` rejects
+        // a suffixed bound, so the port rejects these too.
+        assert!(parse("600s-1200").is_err());
+        assert!(parse("600s-1200s").is_err());
+        assert!(parse("-1200").is_err());
+        assert!(parse("600-").is_err());
+        assert!(parse("600-12x").is_err());
+        assert!(parse("abc").is_err());
+        assert!(parse("").is_err());
     }
 
     #[test]

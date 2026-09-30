@@ -174,9 +174,11 @@ fn build_acceptor(settings: &TlsInboundSettings) -> Result<TlsAcceptor> {
 
 /// Map the configured `minVersion`/`maxVersion` onto the rustls protocol versions.
 ///
-/// Mirrors the outbound agent's mapping: `1.0|1.1|1.2|1.3` are accepted (older versions are
-/// clamped to rustls' 1.2 floor), anything else is a config error. `None` means the rustls
-/// safe default (TLS 1.2 + TLS 1.3).
+/// Mirrors the outbound agent's mapping: `None` means the rustls safe default (TLS 1.2 + TLS 1.3).
+/// rustls cannot negotiate TLS 1.0/1.1, so a min of `1.0`/`1.1` is clamped up to 1.2 (offering
+/// *more* than the configured floor is safe), while a max of `1.0`/`1.1` is a named config error —
+/// the requested ceiling cannot be expressed and must never be silently raised. A min above the
+/// max is rejected as well, as is any unrecognised version string.
 #[cfg(feature = "rustls-tls")]
 fn rustls_versions(
     min_version: Option<&str>,
@@ -204,7 +206,7 @@ fn rustls_versions(
     }
 
     let mut versions = Vec::new();
-    if min_rank <= 12 {
+    if min_rank <= 12 && max_rank >= 12 {
         versions.push(&TLS12);
     }
     if max_rank >= 13 {
@@ -216,7 +218,7 @@ fn rustls_versions(
             max_version
         ));
     }
-    if min_rank < 12 {
+    if min_rank > 0 && min_rank < 12 {
         tracing::trace!(
             "tls min_version {:?} clamped to 1.2 (rustls minimum)",
             min_version
@@ -988,6 +990,23 @@ mod tests {
         );
         assert!(super::rustls_versions(Some("1.3"), Some("1.2")).is_err());
         assert!(super::rustls_versions(None, Some("1.1")).is_err());
+        assert!(super::rustls_versions(None, Some("1.0")).is_err());
         assert!(super::rustls_versions(Some("2.0"), None).is_err());
+
+        // A max below rustls' floor is a *named* error, not a silent raise of the ceiling.
+        let err = super::rustls_versions(None, Some("1.1"))
+            .err()
+            .expect("max 1.1 is not expressible by rustls")
+            .to_string();
+        assert!(err.contains("1.2"), "{}", err);
+
+        // A min below the floor is still clamped up (offering more than the floor is safe).
+        assert_eq!(
+            super::rustls_versions(Some("1.1"), None)
+                .unwrap()
+                .unwrap()
+                .len(),
+            2
+        );
     }
 }
