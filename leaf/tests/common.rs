@@ -563,15 +563,13 @@ fn transfering_reliability(
     > = Vec::new();
     futs.push(Box::pin(recv_task));
     futs.push(Box::pin(send_task));
+    // Spawn before entering the runtime: the future must not hold the runtime
+    // it is driven by.
+    let joined = rt.spawn(futures::future::try_join_all(futs));
     let res = rt.block_on(async move {
         // Bounded, because a scenario that waits forever tells the CI nothing
         // and takes every test behind it down with it.
-        match timeout(
-            Duration::from_secs(30),
-            rt.spawn(futures::future::try_join_all(futs)),
-        )
-        .await
-        {
+        match timeout(Duration::from_secs(30), joined).await {
             Ok(Ok(res)) => res,
             Ok(Err(e)) => Err(anyhow::anyhow!("task join error: {}", e)),
             Err(_) => Err(anyhow::anyhow!("the transfer scenario timed out")),
@@ -671,15 +669,13 @@ fn transfering_reliability(
     > = Vec::new();
     futs.push(Box::pin(recv_task));
     futs.push(Box::pin(send_task));
+    // Spawn before entering the runtime: the future must not hold the runtime
+    // it is driven by.
+    let joined = rt.spawn(futures::future::try_join_all(futs));
     let res = rt.block_on(async move {
         // Bounded, because a scenario that waits forever tells the CI nothing
         // and takes every test behind it down with it.
-        match timeout(
-            Duration::from_secs(30),
-            rt.spawn(futures::future::try_join_all(futs)),
-        )
-        .await
-        {
+        match timeout(Duration::from_secs(30), joined).await {
             Ok(Ok(res)) => res,
             Ok(Err(e)) => Err(anyhow::anyhow!("task join error: {}", e)),
             Err(_) => Err(anyhow::anyhow!("the transfer scenario timed out")),
@@ -815,15 +811,13 @@ fn transfering_reliability(
     > = Vec::new();
     futs.push(Box::pin(recv_task));
     futs.push(Box::pin(send_task));
+    // Spawn before entering the runtime: the future must not hold the runtime
+    // it is driven by.
+    let joined = rt.spawn(futures::future::try_join_all(futs));
     let res = rt.block_on(async move {
         // Bounded, because a scenario that waits forever tells the CI nothing
         // and takes every test behind it down with it.
-        match timeout(
-            Duration::from_secs(30),
-            rt.spawn(futures::future::try_join_all(futs)),
-        )
-        .await
-        {
+        match timeout(Duration::from_secs(30), joined).await {
             Ok(Ok(res)) => res,
             Ok(Err(e)) => Err(anyhow::anyhow!("task join error: {}", e)),
             Err(_) => Err(anyhow::anyhow!("the transfer scenario timed out")),
@@ -961,15 +955,13 @@ fn transfering_reliability(
     > = Vec::new();
     futs.push(Box::pin(recv_task));
     futs.push(Box::pin(send_task));
+    // Spawn before entering the runtime: the future must not hold the runtime
+    // it is driven by.
+    let joined = rt.spawn(futures::future::try_join_all(futs));
     let res = rt.block_on(async move {
         // Bounded, because a scenario that waits forever tells the CI nothing
         // and takes every test behind it down with it.
-        match timeout(
-            Duration::from_secs(30),
-            rt.spawn(futures::future::try_join_all(futs)),
-        )
-        .await
-        {
+        match timeout(Duration::from_secs(30), joined).await {
             Ok(Ok(res)) => res,
             Ok(Err(e)) => Err(anyhow::anyhow!("task join error: {}", e)),
             Err(_) => Err(anyhow::anyhow!("the transfer scenario timed out")),
