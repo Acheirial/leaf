@@ -22,8 +22,10 @@ response header. The only addon field used is `Flow`.
 request is authenticated when its 16-byte user id matches a configured UUID
 using Xray's `vless.ProcessUUID` comparison (the two route bytes at offsets 6
 and 7 of the id are ignored). An empty `users` list is a startup error
-(`no VLESS users configured`); an unknown user id is rejected with an error
-rather than being sent to a fallback.
+(`no VLESS users configured`). An unknown but well-formed user id is treated
+like any other authentication failure: when fallbacks are configured the bytes
+read so far are replayed to the fallback, otherwise the request is rejected
+with `invalid VLESS request user id`.
 
 Object entries support these fields:
 
@@ -31,7 +33,7 @@ Object entries support these fields:
 |---|---|
 | `id` | User UUID. Required. |
 | `flow` | Only `""` or `xtls-rprx-vision`. Any other value is a startup error. |
-| `encryption` | Must be empty or `none` on the inbound; anything else is a startup error. |
+| `encryption` | Must be empty or `none` on the inbound; anything else is a startup error (Xray rejects it too, `infra/conf/vless.go:84`). |
 | `level` | Parsed but not used. |
 
 ### Inbound settings
@@ -39,7 +41,7 @@ Object entries support these fields:
 | Key | Meaning |
 |---|---|
 | `users` | The user list described above. |
-| `decryption` | VLESS encryption. Only empty or `none` is accepted; any `mlkem768x25519plus.…` scheme is rejected at startup while the handshake is not implemented in this build. |
+| `decryption` | VLESS encryption. Empty or `none` disables it; a `mlkem768x25519plus.…` scheme enables it (see [VLESS encryption](#vless-encryption-mlkem768x25519plus)). Mutually exclusive with `fallbacks`. |
 | `fallbacks` | List of fallback entries (see below). |
 
 ### Commands
@@ -54,6 +56,15 @@ Object entries support these fields:
 the Vision record layer. Vision combined with UDP is rejected
 (`xtls-rprx-vision does not support UDP without mux`).
 
+The flow is enforced per account, as in Xray:
+
+- a request carrying `xtls-rprx-vision` for an account whose `flow` is not
+  `xtls-rprx-vision` is rejected (`… is not able to use the flow …`);
+- a request with an empty flow (`cmd=1`) for an account configured with
+  `xtls-rprx-vision` is rejected (`… is rejected since the client flow is
+  empty …`);
+- any other flow value is rejected (`unknown VLESS request flow …`).
+
 VLESS itself has no datagram transport: UDP travels inside a `cmd=2` stream. The
 inbound builds a datagram handler, but it only logs and yields nothing rather
 than pretending to carry raw datagrams.
@@ -66,10 +77,10 @@ dropped. Each entry matches on `(name, alpn, path)`:
 
 | Key | Meaning |
 |---|---|
-| `name` | TLS server name. Matched by longest configured substring of the session's TLS SNI, else the empty wildcard entry. |
-| `alpn` | Negotiated ALPN. leaf does not expose the negotiated ALPN of an outer TLS session, so this is always empty at runtime: only the wildcard (`""`) ALPN entry can match. |
+| `name` | Server name of the outer TLS/REALITY session (the client's SNI, lower-cased). Matched by longest configured substring, else the empty wildcard entry. |
+| `alpn` | ALPN negotiated on the outer TLS/REALITY session (lower-cased). The TLS inbound does not configure ALPN, so that entry is normally empty; REALITY negotiates `h2`/`http/1.1`. |
 | `path` | Request path, parsed from the first bytes of an HTTP request. Empty means the wildcard. Must be empty or start with `/`. |
-| `type` | `tcp` or `unix`; any other value is a startup error, and it may not be empty while `dest` is set. |
+| `type` | `tcp` or `unix`. It may not be empty while `dest` is set (startup error); a non-empty unknown value is rejected only when the fallback is dialed (`unsupported fallback type`), not at startup. |
 | `dest` | `host:port` (or a Unix socket path). |
 | `xver` | PROXY protocol version prepended to the fallback connection: `0` none (default), `1` v1 ASCII, `2` v2 binary. Values above `2` are a startup error. |
 
@@ -111,12 +122,18 @@ inbounds:
 |---|---|
 | `address`, `port` | Server endpoint. |
 | `uuid` | User UUID. |
-| `encryption` | Only empty or `none` is accepted; any `mlkem768x25519plus.…` scheme is rejected at startup while the handshake is not implemented in this build. |
+| `flow` | Optional. Set to `xtls-rprx-vision` to request the client-side Vision flow; an empty value sends no flow (empty addons blob). |
+| `encryption` | Optional VLESS encryption. Empty or `none` disables it; a `mlkem768x25519plus.…` scheme enables it (see [VLESS encryption](#vless-encryption-mlkem768x25519plus)). |
 
-The outbound settings carry no flow field, so the client sends no flow (an empty
-addons blob): `xtls-rprx-vision` is a server-side capability here, not something
-the outbound requests. Both TCP and UDP are supported; UDP uses the same
-`cmd=2` framing as the inbound.
+When `flow` is `xtls-rprx-vision` the outbound sends the flow in the request
+addons and wraps the body in the Vision record layer. The leading write is
+long-padded; if no payload is available within 500 ms an empty long-padded
+block is sent first, mirroring Xray's client. Both TCP and UDP are supported;
+UDP uses the same `cmd=2` framing as the inbound (and never carries a flow).
+
+Vision requires a TLS/REALITY outer transport, so chain the outbound behind a
+`tls` (TLS 1.3) or `reality` outbound. A vision-configured server rejects a
+plain (non-TLS) request for a vision account.
 
 ```yaml
 outbounds:
@@ -126,4 +143,85 @@ outbounds:
       address: 192.0.2.1
       port: 443
       uuid: b831381d-6324-4d53-ad4f-8cda48b30811
+      flow: xtls-rprx-vision
 ```
+
+## VLESS encryption (`mlkem768x25519plus`)
+
+The inbound `decryption` and outbound `encryption` settings accept Xray's
+`mlkem768x25519plus` scheme. The hybrid ML-KEM-768 + X25519 handshake runs
+before the VLESS request header, and the header and body are then carried as
+AEAD records (the VLESS protocol itself is unchanged). A session that fails the
+handshake aborts; it is never downgraded to plaintext.
+
+The accepted grammar (`encryption/scheme.rs`) is:
+
+```text
+server (decryption): mlkem768x25519plus.{native|xorpub|random}.{N[s]|N-M[s]}.[padding.]{key}[.{key}]
+client (encryption): mlkem768x25519plus.{native|xorpub|random}.{0rtt|1rtt}.[padding.]{key}[.{key}]
+```
+
+* **Disguise** — `native`, `xorpub` or `random`. `xorpub` XORs the ephemeral
+  public keys of the relay chain with an AES-256-CTR stream keyed from the
+  configured key and the IV; `random` additionally XORs the 5-byte header of
+  every record.
+* **Client mode** — `1rtt` or `0rtt`.
+* **Server lifetime** — `N`, `Ns`, `N-M` or `N-Ms`; a single trailing `s`
+  belongs to the whole field and is stripped before the field is split on its
+  first `-`, so `Ns-M` and `Ns-Ms` are invalid. A single value `N` is not a
+  fixed lifetime: the server picks a random value in `[N/2, N)`; the `N-M` form
+  picks a random value in `[N, M)`.
+* **Padding and keys** — the dot-separated fields that precede the first field
+  of 20 or more characters; fields shorter than 20 characters are padding. The
+  remaining fields are the keys (base64url, no padding). A key is X25519 (32
+  bytes) or ML-KEM-768: the client supplies the 1184-byte encapsulation key,
+  the server the 64-byte private seed. At least one key is required; any other
+  key length is a startup error.
+
+### Supported
+
+* `native`, `xorpub` and `random` disguise;
+* the `1rtt` client handshake and the full server lifetime grammar;
+* the AEAD record layer: 8192-byte plaintext chunks framed with a TLS-shaped
+  `17 03 03 <len:2>` header (accepted ciphertext length `17..=16640`),
+  AES-256-GCM by default and ChaCha20-Poly1305 when the AES hardware path is
+  unavailable — the server guesses AES and switches to ChaCha on the first
+  record;
+* a fresh hybrid key exchange per session: the client sends a 16-byte IV, one
+  relay entry per configured key, and an ML-KEM-768 encapsulation key plus an
+  X25519 public key; the server answers with an ML-KEM-768 ciphertext plus an
+  X25519 public key. The ML-KEM and X25519 shared secrets are concatenated and
+  mixed with the relay-derived key, and every handshake key is a BLAKE3
+  derive-key output;
+* the server still issues the 16-byte ticket whose first two bytes carry the
+  advertised lifetime.
+
+### Not supported
+
+Both gaps fail closed as named errors, never as a silent downgrade:
+
+* **Client `0rtt`** — rejected while parsing the outbound `encryption` setting
+  (`EncryptionError::Unsupported`, the message names `0rtt`). There is no
+  ticket cache; configure `1rtt` instead.
+* **Server 0-RTT hello** — a client hello whose decrypted length is 32 (Xray's
+  0-RTT ticket handshake) is rejected at connection time
+  (`VLESS encryption: 0-RTT tickets are not implemented in this build`). There
+  is no session store and no replay protection.
+
+As a result a VLESS client configured for 0-RTT (e.g. Xray) does not
+interoperate with this server; the account must use 1-RTT.
+
+### Configuration rules
+
+* On the inbound, `decryption` may be empty, `none`, or a
+  `mlkem768x25519plus.…` scheme. A real scheme is mutually exclusive with
+  `fallbacks`: combining them is a startup error
+  (`"fallbacks" cannot be used together with "decryption"`), because the
+  handshake consumes bytes before the VLESS request header is seen and a
+  fallback could not be handed the connection verbatim (Xray
+  `infra/conf/vless.go:157`).
+* A per-user `encryption` in `users` is still rejected
+  (`VLESS users: "encryption" should not be in inbound settings`), matching
+  Xray (`infra/conf/vless.go:84`): encryption is configured once per inbound,
+  not per user.
+* `level` is parsed but not used.

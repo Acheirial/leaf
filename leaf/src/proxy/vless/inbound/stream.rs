@@ -94,6 +94,16 @@ impl Handler {
             _ => None,
         };
 
+        // Xray refuses to combine an encrypted inbound with fallbacks
+        // (`infra/conf/vless.go:157`): the decryption handshake consumes bytes
+        // before the VLESS request is seen, so a fallback could not be handed
+        // the connection verbatim.
+        if decryption.is_some() && !settings.fallbacks.is_empty() {
+            return Err(anyhow::anyhow!(
+                "VLESS settings: \"fallbacks\" cannot be used together with \"decryption\""
+            ));
+        }
+
         let fallbacks = Fallbacks::new(&settings.fallbacks)?;
 
         Ok(Handler {
@@ -109,13 +119,16 @@ impl Handler {
         mut stream: AnyStream,
         seen: Vec<u8>,
     ) -> io::Result<AnyInboundTransport> {
+        // Xray selects the fallback from the *outer* connection state, not from
+        // anything sniffed from the payload: the server name and the negotiated
+        // ALPN are populated by the TLS/REALITY inbound.
         let name = sess
-            .tls_sniffed_domain
+            .outer_sni
             .clone()
+            .or_else(|| sess.tls_sniffed_domain.clone())
             .unwrap_or_default()
             .to_lowercase();
-        // leaf does not expose the negotiated ALPN of an outer TLS session.
-        let alpn = String::new();
+        let alpn = sess.outer_alpn.clone().unwrap_or_default().to_lowercase();
         let path = fallback::http_path(&seen);
         let fb = self
             .fallbacks
@@ -173,34 +186,56 @@ impl InboundStreamHandler for Handler {
                 return self.handle_fallback(sess, stream, seen).await;
             }
         };
-        let mut stream = peek.into_inner();
-
-        let user = self
-            .users
-            .get(&process_uuid(request.user))
-            .ok_or_else(|| {
-                io::Error::other(format!(
+        // An unknown but well-formed user id is not fatal when fallbacks are
+        // configured: Xray feeds the validator failure into the same fallback
+        // path, replaying the bytes already read.
+        let user = match self.users.get(&process_uuid(request.user)).cloned() {
+            Some(user) => user,
+            None => {
+                let e = io::Error::other(format!(
                     "invalid VLESS request user id: {}",
                     uuid::Uuid::from_bytes(request.user)
-                ))
-            })?
-            .clone();
+                ));
+                if self.fallbacks.is_empty() {
+                    return Err(e);
+                }
+                let seen = peek.take_seen();
+                let stream = peek.into_inner();
+                tracing::debug!("vless request invalid ({}), trying a fallback", e);
+                return self.handle_fallback(sess, stream, seen).await;
+            }
+        };
+        let mut stream = peek.into_inner();
 
+        // Flow policy, matching Xray: a flow may only be used by an account
+        // configured for it, and a vision account may not be reached without
+        // the flow (otherwise the outer TLS would carry a plain TLS stream).
+        let vision = request.addons.flow == FLOW_VISION;
         match request.addons.flow.as_str() {
-            "" | FLOW_VISION => {}
+            FLOW_VISION => {
+                if user.flow != FLOW_VISION {
+                    return Err(io::Error::other(format!(
+                        "vless account {} is not able to use the flow {}",
+                        uuid::Uuid::from_bytes(user.id),
+                        FLOW_VISION
+                    )));
+                }
+            }
+            "" => {
+                if user.flow == FLOW_VISION && request.command == CMD_TCP {
+                    return Err(io::Error::other(format!(
+                        "vless account {} is rejected since the client flow is empty. \
+                         Note that the pure TLS proxy has certain TLS in TLS characters.",
+                        uuid::Uuid::from_bytes(user.id)
+                    )));
+                }
+            }
             other => {
                 return Err(io::Error::other(format!(
                     "unknown VLESS request flow {:?}",
                     other
                 )))
             }
-        }
-        let vision = request.addons.flow == FLOW_VISION;
-        if vision && user.flow != FLOW_VISION {
-            tracing::debug!(
-                "vless user {} requests vision but is not configured for it",
-                uuid::Uuid::from_bytes(user.id)
-            );
         }
 
         sess.destination = request.destination.clone();

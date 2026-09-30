@@ -6,11 +6,13 @@
 //! stream consumes lazily on the first read so the handler can return before
 //! the peer has said anything.
 
+use std::io;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
+use super::encoding::VERSION;
 use super::vision::{Padder, Unpadder};
 
 pub struct VisionStream<S> {
@@ -31,13 +33,20 @@ impl<S: AsyncRead + AsyncWrite + Unpin> VisionStream<S> {
     /// Wraps a client stream: reads skip the response header, and the vision
     /// flow is applied when `vision` is set.
     pub fn client(inner: S, user_uuid: [u8; 16], vision: bool) -> Self {
+        let padder = if vision {
+            Padder::new(user_uuid)
+        } else {
+            Padder::disabled()
+        };
+        Self::client_with_padder(inner, user_uuid, padder, vision)
+    }
+
+    /// Wraps a client stream reusing a padder that already emitted the leading
+    /// (long-padded) block, so the user id is not prefixed twice.
+    pub fn client_with_padder(inner: S, user_uuid: [u8; 16], padder: Padder, vision: bool) -> Self {
         VisionStream {
             inner,
-            padder: if vision {
-                Padder::new(user_uuid)
-            } else {
-                Padder::disabled()
-            },
+            padder,
             unpadder: if vision {
                 Unpadder::new(user_uuid)
             } else {
@@ -87,23 +96,30 @@ fn consume_response_header(
     chunk: &[u8],
     unpadder: &mut Unpadder,
     plaintext: &mut Vec<u8>,
-) {
+) -> io::Result<()> {
     if !*pending {
         plaintext.extend_from_slice(&unpadder.unpad(chunk));
-        return;
+        return Ok(());
     }
     header.extend_from_slice(chunk);
     if header.len() < 2 {
-        return;
+        return Ok(());
+    }
+    if header[0] != VERSION {
+        return Err(io::Error::other(format!(
+            "vless: unexpected response version {} (expecting {})",
+            header[0], VERSION
+        )));
     }
     let needed = 2 + header[1] as usize;
     if header.len() < needed {
-        return;
+        return Ok(());
     }
     let rest = header.split_off(needed);
     header.clear();
     *pending = false;
     plaintext.extend_from_slice(&unpadder.unpad(&rest));
+    Ok(())
 }
 
 impl<S: AsyncRead + AsyncWrite + Unpin> AsyncRead for VisionStream<S> {
@@ -130,13 +146,15 @@ impl<S: AsyncRead + AsyncWrite + Unpin> AsyncRead for VisionStream<S> {
                         return Poll::Ready(Ok(()));
                     }
                     let chunk = read_buf.filled().to_vec();
-                    consume_response_header(
+                    if let Err(e) = consume_response_header(
                         &mut this.response_header,
                         &mut this.response_header_pending,
                         &chunk,
                         &mut this.unpadder,
                         &mut this.plaintext,
-                    );
+                    ) {
+                        return Poll::Ready(Err(e));
+                    }
                 }
                 Poll::Ready(Err(e)) => return Poll::Ready(Err(e)),
                 Poll::Pending => return Poll::Pending,
@@ -216,5 +234,45 @@ impl<S: AsyncRead + AsyncWrite + Unpin> VisionStream<S> {
         self.pending.clear();
         self.pending_off = 0;
         Poll::Ready(Ok(()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mismatched_response_version_is_rejected() {
+        let mut unpadder = Unpadder::disabled();
+        let mut header = Vec::new();
+        let mut pending = true;
+        let mut plaintext = Vec::new();
+        let err = consume_response_header(
+            &mut header,
+            &mut pending,
+            &[7u8, 0],
+            &mut unpadder,
+            &mut plaintext,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("unexpected response version"));
+    }
+
+    #[test]
+    fn matching_response_header_is_consumed() {
+        let mut unpadder = Unpadder::disabled();
+        let mut header = Vec::new();
+        let mut pending = true;
+        let mut plaintext = Vec::new();
+        consume_response_header(
+            &mut header,
+            &mut pending,
+            &[VERSION, 0, b'a', b'b'],
+            &mut unpadder,
+            &mut plaintext,
+        )
+        .unwrap();
+        assert!(!pending);
+        assert_eq!(plaintext, b"ab");
     }
 }

@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadHalf, WriteHalf};
 
 use super::super::datagram::{encode_packet, encode_udp_header, PacketDecoder};
-use super::super::encoding::Addons;
+use super::super::encoding::{Addons, VERSION};
 use super::super::encryption::ClientInstance;
 use crate::app::SyncDnsClient;
 use crate::config;
@@ -166,6 +166,12 @@ where
                     .map_or(false, |needed| self.header.buffer.len() >= needed)
                 {
                     let needed = self.header.needed.unwrap();
+                    if self.header.buffer[0] != VERSION {
+                        return Err(io::Error::other(format!(
+                            "vless: unexpected response version {} (expecting {})",
+                            self.header.buffer[0], VERSION
+                        )));
+                    }
                     self.header.buffer.drain(..needed);
                     self.header.parsed = true;
                     let rest = std::mem::take(&mut self.header.buffer);

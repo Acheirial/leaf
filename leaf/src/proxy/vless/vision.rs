@@ -75,6 +75,11 @@ pub fn xtls_padding(
 pub struct Padder {
     enabled: bool,
     user_uuid: Option<[u8; 16]>,
+    /// Whether blocks are still long-padded. Xray long-pads while the outer
+    /// connection is TLS (`IsTLS`); leaf cannot see the TLS record boundary
+    /// here, so the leading blocks are long-padded and the padding becomes
+    /// short after the first block that carries content.
+    long_padding: bool,
     testseed: [u32; 4],
 }
 
@@ -83,6 +88,7 @@ impl Padder {
         Padder {
             enabled: true,
             user_uuid: Some(user_uuid),
+            long_padding: true,
             testseed: DEFAULT_TESTSEED,
         }
     }
@@ -91,6 +97,7 @@ impl Padder {
         Padder {
             enabled: false,
             user_uuid: None,
+            long_padding: false,
             testseed: DEFAULT_TESTSEED,
         }
     }
@@ -107,7 +114,10 @@ impl Padder {
         // Everything but a signal to pad an empty packet is sent as a
         // `continue` block; without an outer TLS session there is no point at
         // which the flow would hand over to a raw copy.
-        let long = content.is_empty();
+        let long = self.long_padding;
+        if !content.is_empty() {
+            self.long_padding = false;
+        }
         xtls_padding(
             content,
             CMD_CONTINUE,
@@ -273,6 +283,36 @@ mod tests {
         let mut unpadder = Unpadder::new(UUID);
         let wire = padder.pad(b"hello world");
         assert_eq!(unpadder.unpad(&wire), b"hello world");
+    }
+
+    #[test]
+    fn leading_blocks_are_long_padded_then_short() {
+        let mut padder = Padder::new(UUID);
+        // The empty camouflage block and the first payload block are
+        // long-padded (>= testseed[2] - content), later blocks are not.
+        let empty = padder.pad(b"");
+        let empty_pad = ((empty[19] as usize) << 8) | empty[20] as usize;
+        assert!(
+            empty_pad > 256,
+            "empty block padding {} not long",
+            empty_pad
+        );
+
+        let first = padder.pad(b"short");
+        let first_pad = ((first[19] as usize) << 8) | first[20] as usize;
+        assert!(
+            first_pad >= 900 - 5,
+            "first block padding {} not long",
+            first_pad
+        );
+
+        let second = padder.pad(b"short");
+        let second_pad = ((second[19] as usize) << 8) | second[20] as usize;
+        assert!(
+            second_pad < 256,
+            "later block padding {} not short",
+            second_pad
+        );
     }
 
     #[test]

@@ -1,16 +1,22 @@
 use std::io;
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
 use super::super::encoding::{self, Addons, CMD_TCP, FLOW_VISION};
 use super::super::encryption::ClientInstance;
 use super::super::stream::VisionStream;
+use super::super::vision::Padder;
 use crate::app::SyncDnsClient;
 use crate::config;
 use crate::{proxy::*, session::*};
+
+/// How long the client waits for the first payload before sending the empty
+/// camouflage block, matching Xray's `500 * time.Millisecond` timeout.
+const FIRST_PAYLOAD_TIMEOUT: Duration = Duration::from_millis(500);
 
 pub struct Handler {
     address: String,
@@ -37,10 +43,7 @@ impl Handler {
             address: settings.address.clone(),
             port: settings.port as u16,
             uuid: *uuid.as_bytes(),
-            // The VLESS outbound settings carry no flow field, so the client
-            // sends no flow at all: the addons blob is empty and the peer sees
-            // a plain VLESS stream. Vision is a server side capability here.
-            flow: None,
+            flow: settings.flow.clone().filter(|flow| !flow.is_empty()),
             encryption,
         })
     }
@@ -55,7 +58,7 @@ impl OutboundStreamHandler for Handler {
     async fn handle<'a>(
         &'a self,
         sess: &'a Session,
-        _lhs: Option<&mut AnyStream>,
+        lhs: Option<&mut AnyStream>,
         stream: Option<AnyStream>,
     ) -> io::Result<AnyStream> {
         tracing::trace!("handling outbound stream");
@@ -69,14 +72,32 @@ impl OutboundStreamHandler for Handler {
         let header =
             encoding::encode_request_header(&self.uuid, CMD_TCP, &sess.destination, &addons);
         stream.write_all(&header).await?;
-        stream.flush().await?;
 
         // The client stream always has to consume the server's response
         // header; the vision flow is layered on top of that when configured.
-        Ok(Box::new(VisionStream::client(
-            stream,
-            self.uuid,
-            self.flow.as_deref() == Some(FLOW_VISION),
+        if self.flow.as_deref() != Some(FLOW_VISION) {
+            stream.flush().await?;
+            return Ok(Box::new(VisionStream::client(stream, self.uuid, false)));
+        }
+
+        // Mirror Xray's first write: wait briefly for the first payload. When
+        // it arrives it becomes the long-padded leading block; otherwise an
+        // empty long-padded block is sent so the VLESS header does not stand
+        // out as a short packet on its own.
+        let mut padder = Padder::new(self.uuid);
+        let mut first = Vec::new();
+        if let Some(lhs) = lhs {
+            match tokio::time::timeout(FIRST_PAYLOAD_TIMEOUT, lhs.read_buf(&mut first)).await {
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => return Err(e),
+                Err(_) => first.clear(),
+            }
+        }
+        stream.write_all(&padder.pad(&first)).await?;
+        stream.flush().await?;
+
+        Ok(Box::new(VisionStream::client_with_padder(
+            stream, self.uuid, padder, true,
         )))
     }
 }

@@ -355,6 +355,7 @@ pub struct VlessOutboundSettings {
     pub port: Option<u16>,
     pub uuid: Option<String>,
     pub encryption: Option<String>,
+    pub flow: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -1713,6 +1714,9 @@ pub fn to_internal(mut config: Config) -> Result<internal::Config> {
                         }
                         if let Some(ext_encryption) = &ext_settings.encryption {
                             settings.encryption = Some(ext_encryption.clone());
+                        }
+                        if let Some(ext_flow) = &ext_settings.flow {
+                            settings.flow = Some(ext_flow.clone());
                         }
                         let settings = settings
                             .write_to_bytes()
