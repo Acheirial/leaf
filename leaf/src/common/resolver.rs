@@ -19,6 +19,17 @@ impl Resolver {
         address: &'a String,
         port: &'a u16,
     ) -> Result<Self> {
+        // A handler with no endpoint has nothing to dial. Looking the empty
+        // name up instead asks the name servers for the root zone and then
+        // dials port 0 of whatever answers -- and a dial that reaches the
+        // dispatcher turns into another dial of the same handler, which is
+        // how a chain's payload actor, configured without an endpoint on
+        // purpose because it rides the transport the chain hands it, used to
+        // recurse until the stack ran out.
+        if address.is_empty() {
+            return Err(anyhow!("no address to dial"));
+        }
+
         let mut ips = {
             dns_client
                 .read()

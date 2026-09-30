@@ -1,11 +1,14 @@
 mod common;
 
-// app(socks) -> (socks)client(chain(socks+finalmask)) -> (chain(finalmask+socks))server(direct) -> echo
+// app(socks) -> (socks)client(chain(finalmask+socks)) -> (chain(finalmask+socks))server(direct) -> echo
 //
-// For UDP the mask has to sit on the datagram the payload actually travels
-// over, so the client chain runs the socks payload first and the finalmask
-// transport last (closest to the wire), while the server unwraps it first:
-// the wire between the two instances is masked socks5 UDP datagrams.
+// A chain runs its actors outwards from the wire: the first one holds what was
+// dialled, and every actor after it carries what the one before it produced,
+// so the payload belongs last. For UDP that puts the mask first -- it wraps the
+// datagram the dispatcher dialled -- and the socks payload last, which is what
+// makes the wire between the two instances masked socks5 UDP datagrams. Both
+// sides list the mask first: the server takes the mask apart before it reads
+// the payload.
 
 const SALAMANDER: &str = r#"{"password":"finalmask-psk"}"#;
 const SUDOKU: &str = r#"{"password":"finalmask-test","ascii":"prefer_entropy"}"#;
@@ -50,7 +53,7 @@ fn test_finalmask_udp() -> anyhow::Result<()> {
             {{ "protocol": "socks", "address": "127.0.0.1", "port": 5311 }}
         ],
         "outbounds": [
-            {{ "protocol": "chain", "settings": {{ "actors": ["socks", "finalmask"] }} }},
+            {{ "protocol": "chain", "settings": {{ "actors": ["finalmask", "socks"] }} }},
             {{ "protocol": "socks", "tag": "socks", "settings": {{ "address": "127.0.0.1", "port": 5312 }} }},
             {{
                 "protocol": "finalmask",
