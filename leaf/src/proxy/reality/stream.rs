@@ -8,20 +8,32 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 
+/// Base certificate verifier for the REALITY client.
+///
+/// The REALITY HMAC check lives in `RealityConnectionState::verify_server_cert`,
+/// which returns `Ok` for a matching dummy certificate and only falls through to
+/// this verifier otherwise. Signature verification is delegated here (the dummy
+/// certificate is authenticated by its HMAC signature field, never by a chain),
+/// but `verify_server_cert` always fails: a peer that presents a certificate
+/// chaining to a public root is an attack, and Xray aborts on it after the
+/// handshake (`Xray-core/.../reality/reality.go:208-299`, `uConn.Verified`).
+/// Accepting such a certificate would let a non-REALITY peer complete the
+/// handshake and receive application data.
 #[derive(Debug)]
-struct DebugVerifier(Arc<dyn reality_rustls::client::danger::ServerCertVerifier>);
+struct FailClosedVerifier(Arc<dyn reality_rustls::client::danger::ServerCertVerifier>);
 
-impl reality_rustls::client::danger::ServerCertVerifier for DebugVerifier {
+impl reality_rustls::client::danger::ServerCertVerifier for FailClosedVerifier {
     fn verify_server_cert(
         &self,
-        end_entity: &reality_rustls::pki_types::CertificateDer<'_>,
-        intermediates: &[reality_rustls::pki_types::CertificateDer<'_>],
+        _end_entity: &reality_rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[reality_rustls::pki_types::CertificateDer<'_>],
         server_name: &ServerName<'_>,
-        ocsp_response: &[u8],
-        now: reality_rustls::pki_types::UnixTime,
+        _ocsp_response: &[u8],
+        _now: reality_rustls::pki_types::UnixTime,
     ) -> Result<reality_rustls::client::danger::ServerCertVerified, reality_rustls::Error> {
-        self.0
-            .verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now)
+        Err(reality_rustls::Error::General(format!(
+            "reality: server certificate for {server_name:?} does not carry a matching REALITY HMAC"
+        )))
     }
 
     fn verify_tls12_signature(
@@ -68,16 +80,22 @@ pub fn create_reality_provider() -> Arc<reality_rustls::crypto::CryptoProvider> 
     Arc::new(provider)
 }
 
+/// Build the REALITY client configuration.
+///
+/// `signature_verifier` supplies the TLS signature-verification primitives
+/// (e.g. a `WebPkiServerVerifier`); its chain validation is never consulted,
+/// because [`FailClosedVerifier`] rejects every certificate the REALITY HMAC
+/// check did not vouch for.
 pub fn build_rustls_config(
     provider_arc: Arc<reality_rustls::crypto::CryptoProvider>,
-    fallback_verifier: Arc<dyn reality_rustls::client::danger::ServerCertVerifier>,
+    signature_verifier: Arc<dyn reality_rustls::client::danger::ServerCertVerifier>,
     server_public_key: [u8; 32],
     short_id: [u8; 8],
 ) -> Result<Arc<ClientConfig>, Box<dyn std::error::Error>> {
     let reality_state = Arc::new(RealityConnectionState::new(
         server_public_key,
         short_id,
-        Arc::new(DebugVerifier(fallback_verifier)),
+        Arc::new(FailClosedVerifier(signature_verifier)),
     ));
 
     let mut config = ClientConfig::builder_with_provider(provider_arc)

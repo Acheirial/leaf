@@ -23,7 +23,12 @@ jobs:
           rust-version: stable
 
       - name: test leaf
-        run: cargo test -p leaf --no-fail-fast
+        run: |
+          # Bisect aid on a throwaway branch: the suite stops at
+          # test_finalmask_tcp, so run only that binary under a bound and say
+          # how it ended. 124 is the hang.
+          timeout 300 cargo test -p leaf --no-fail-fast --test test_finalmask_tcp
+          echo "finalmask-binary-exit=$?"
 
   build:
     strategy:

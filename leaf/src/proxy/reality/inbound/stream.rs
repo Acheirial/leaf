@@ -216,7 +216,7 @@ impl ResolvesServerCert for FixedResolver {
 impl InboundStreamHandler for Handler {
     async fn handle<'a>(
         &'a self,
-        sess: Session,
+        mut sess: Session,
         stream: AnyStream,
     ) -> io::Result<AnyInboundTransport> {
         tracing::trace!("handling inbound reality stream");
@@ -225,45 +225,69 @@ impl InboundStreamHandler for Handler {
         // The patched rustls `Acceptor` never exposes `random`/`session_id`/raw
         // handshake bytes, so read and parse the ClientHello here, then hand the
         // very same record bytes to rustls.
-        let (records, message) = read_client_hello(&mut stream).await?;
-        let hello = parse_client_hello(&message)
-            .ok_or_else(|| io::Error::other("reality: malformed ClientHello"))?;
+        //
+        // Every byte consumed here is replayed to `dest` on the steal path, so a
+        // first record that is not a ClientHello at all (plain HTTP, a TLS
+        // 1.0/1.1 handshake, any probe) and even a read error are relayed
+        // verbatim instead of being closed. The reference reaches its forward
+        // path for *any* read/parse failure (`reality-ref/tls.go:212`, whose
+        // `MirrorConn` forwards every byte, and `282-286`).
+        let mut records = Vec::with_capacity(1024);
+        let message = match read_client_hello(&mut stream, &mut records).await {
+            Ok(message) => Some(message),
+            Err(e) => {
+                tracing::debug!("reality: not a TLS ClientHello, relaying to dest: {e}");
+                None
+            }
+        };
+        let hello = message.as_deref().and_then(parse_client_hello);
 
-        let authenticated = if hello.tls13 && self.sni_allowed(hello.sni.as_deref()) {
-            match self.authenticate(&message, &hello) {
-                Some(auth) => {
-                    if self.show {
-                        tracing::info!(
-                            "REALITY {} authenticated: sni={:?} short_id={:?} time_diff_ms={}",
-                            sess.source,
-                            hello.sni,
-                            auth.short_id,
-                            auth.time_diff_ms
-                        );
+        let authenticated = match (message.as_deref(), hello.as_ref()) {
+            (Some(message), Some(hello))
+                if hello.tls13 && self.sni_allowed(hello.sni.as_deref()) =>
+            {
+                match self.authenticate(message, hello) {
+                    Some(auth) => {
+                        if self.show {
+                            tracing::info!(
+                                "REALITY {} authenticated: sni={:?} short_id={:?} time_diff_ms={}",
+                                sess.source,
+                                hello.sni,
+                                auth.short_id,
+                                auth.time_diff_ms
+                            );
+                        }
+                        Some(auth)
                     }
-                    Some(auth)
+                    None => {
+                        if self.show {
+                            tracing::info!(
+                                "REALITY {} not authenticated: sni={:?}",
+                                sess.source,
+                                hello.sni
+                            );
+                        }
+                        None
+                    }
                 }
-                None => {
-                    if self.show {
-                        tracing::info!(
-                            "REALITY {} not authenticated: sni={:?}",
+            }
+            _ => {
+                if self.show {
+                    match hello.as_ref() {
+                        Some(hello) => tracing::info!(
+                            "REALITY {} rejected ClientHello: tls13={} sni={:?}",
                             sess.source,
+                            hello.tls13,
                             hello.sni
-                        );
+                        ),
+                        None => tracing::info!(
+                            "REALITY {} rejected: first record is not a TLS ClientHello",
+                            sess.source
+                        ),
                     }
-                    None
                 }
+                None
             }
-        } else {
-            if self.show {
-                tracing::info!(
-                    "REALITY {} rejected ClientHello: tls13={} sni={:?}",
-                    sess.source,
-                    hello.tls13,
-                    hello.sni
-                );
-            }
-            None
         };
 
         if let Some(auth) = authenticated {
@@ -274,6 +298,21 @@ impl InboundStreamHandler for Handler {
                 .map_err(|e| io::Error::other(format!("reality: server connection: {e}")))?;
             let mut inbound = InboundStream::new(conn, stream);
             inbound.handshake(&records).await?;
+
+            // Expose the outer connection's SNI/ALPN on the session: the VLESS
+            // fallbacks must select on the *outer* TLS/REALITY parameters, not
+            // on the inner sniffing the dispatcher does later (`Session`:
+            // `outer_sni`, `outer_alpn`). SNI is lowercased; ALPN is kept
+            // verbatim. Both are `None` when absent. The steal path never
+            // reaches VLESS and leaves them unset.
+            sess.outer_sni = hello
+                .as_ref()
+                .and_then(|hello| hello.sni.as_ref())
+                .map(|sni| sni.to_ascii_lowercase());
+            sess.outer_alpn = inbound
+                .conn
+                .alpn_protocol()
+                .map(|alpn| String::from_utf8_lossy(alpn).into_owned());
             return Ok(InboundTransport::Stream(Box::new(inbound), sess));
         }
 
@@ -333,7 +372,10 @@ impl Handler {
 
         let now = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
         let time_diff_ms = now.abs_diff(u64::from(client_time)) * 1000;
-        if let Some(max) = self.max_time_diff_ms {
+        // `maxTimeDiffMs: 0` disables the freshness check, exactly like
+        // `config.MaxTimeDiff == 0 || time.Since(...).Abs() <= config.MaxTimeDiff`
+        // (`reality-ref/tls.go:270`).
+        if let Some(max) = self.max_time_diff_ms.filter(|max| *max != 0) {
             if time_diff_ms > max {
                 return None;
             }
@@ -353,12 +395,21 @@ impl Handler {
 
     /// Byte-transparent relay of the (already partially consumed) client stream
     /// to `dest`, optionally prefixed with a PROXY protocol header.
+    ///
+    /// The dial and the replay of the consumed bytes happen inline so a failure
+    /// still surfaces to the caller; the bidirectional splice then runs in the
+    /// background for the connection's lifetime, exactly like the reference's
+    /// `io.Copy` goroutines (`reality-ref/tls.go:212,282-286`) and the VLESS
+    /// fallback (`vless/inbound/stream.rs:135-141`). Awaiting the splice here
+    /// would pin the relay to the listener's accept timeout and kill every
+    /// relayed connection after the timeout elapses.
     async fn relay(&self, sess: &Session, mut stream: AnyStream, records: &[u8]) -> io::Result<()> {
         let dest = self
             .dest
             .as_deref()
-            .ok_or_else(|| io::Error::other("reality: no dest configured"))?;
-        let mut target = tokio::net::TcpStream::connect(dest)
+            .ok_or_else(|| io::Error::other("reality: no dest configured"))?
+            .to_owned();
+        let mut target = tokio::net::TcpStream::connect(&dest)
             .await
             .map_err(|e| io::Error::other(format!("reality: dial dest {dest} failed: {e}")))?;
 
@@ -369,7 +420,13 @@ impl Handler {
         target.write_all(records).await?;
         target.flush().await?;
 
-        tokio::io::copy_bidirectional(&mut stream, &mut target).await?;
+        // The accept path only waits for the ClientHello; splice the steal path
+        // in the background so the connection can live as long as either side.
+        tokio::spawn(async move {
+            if let Err(e) = tokio::io::copy_bidirectional(&mut stream, &mut target).await {
+                tracing::debug!("reality steal path ended: {}", e);
+            }
+        });
         Ok(())
     }
 }
@@ -390,26 +447,58 @@ struct ClientHelloInfo {
 }
 
 impl ClientHelloInfo {
-    /// The X25519 public key to use for the REALITY ECDH: a plain `x25519` key
-    /// share if present, otherwise the X25519 half of `X25519MLKEM768`.
+    /// The X25519 public key to use for the REALITY ECDH, following the
+    /// selection in `reality-ref/tls.go:216-236`:
+    ///
+    /// * an `X25519MLKEM768` key share (exactly `1184 + 32` bytes) contributes
+    ///   its X25519 half (`keyShare.data[EncapsulationKeySize768:]`);
+    /// * a plain `X25519` key share is only honoured when it appears after the
+    ///   hybrid — the reference breaks at the first plain share and rejects the
+    ///   ClientHello when no hybrid was seen before it (`break // ensure order`);
+    /// * a duplicate share of either group fails the ClientHello
+    ///   (`peerPub2 = nil // ensure fail`).
+    ///
+    /// The reference also rejects a ClientHello that has no hybrid share at all
+    /// ("reject outdated/strange Client Hello that doesn't have
+    /// X25519MLKEM768"). leaf deliberately still accepts a lone plain `X25519`
+    /// share: its own outbound offers only that, because the ring provider has
+    /// no `X25519MLKEM768` group, so requiring the hybrid would break every
+    /// leaf-to-leaf connection. Duplicate and misordered shares are still
+    /// rejected and take the steal path.
     fn x25519_public_key(&self) -> Option<[u8; 32]> {
-        let mut hybrid = None;
+        let mut peer_pub: Option<[u8; 32]> = None; // plain `X25519`
+        let mut peer_pub2: Option<[u8; 32]> = None; // X25519 half of `X25519MLKEM768`
         for (group, data) in &self.key_shares {
             match *group {
-                GROUP_X25519 if data.len() == 32 => {
-                    let mut out = [0u8; 32];
-                    out.copy_from_slice(data);
-                    return Some(out);
-                }
                 GROUP_X25519_MLKEM768 if data.len() == MLKEM768_PUBKEY_LEN + 32 => {
+                    if peer_pub2.is_some() {
+                        // Duplicate hybrid share: the reference forces a failure.
+                        return None;
+                    }
+                    if peer_pub.is_some() {
+                        // Plain X25519 before the hybrid: misordered, rejected by
+                        // the reference's `break // ensure order`.
+                        return None;
+                    }
                     let mut out = [0u8; 32];
                     out.copy_from_slice(&data[MLKEM768_PUBKEY_LEN..]);
-                    hybrid = Some(out);
+                    peer_pub2 = Some(out);
+                }
+                GROUP_X25519 if data.len() == 32 => {
+                    if peer_pub.is_some() {
+                        // Duplicate X25519 share: the reference forces a failure.
+                        return None;
+                    }
+                    let mut out = [0u8; 32];
+                    out.copy_from_slice(data);
+                    peer_pub = Some(out);
                 }
                 _ => {}
             }
         }
-        hybrid
+        // Prefer the plain share when present, otherwise the hybrid's X25519
+        // half (`reality-ref/tls.go:233-235`).
+        peer_pub.or(peer_pub2)
     }
 }
 
@@ -454,25 +543,59 @@ fn parse_short_ids(short_ids: &[String]) -> Result<Vec<[u8; 8]>> {
     Ok(out)
 }
 
+/// `read_exact`, but appends every byte read to `records` — including a short
+/// read that ends in an error — so the steal path can replay partially consumed
+/// records verbatim (`reality-ref/tls.go:282-286` forwards bytes as they
+/// arrive, never discarding what it has already read).
+async fn read_exact_recording<S: AsyncRead + Unpin>(
+    stream: &mut S,
+    buf: &mut [u8],
+    records: &mut Vec<u8>,
+) -> io::Result<()> {
+    let mut filled = 0usize;
+    while filled < buf.len() {
+        match stream.read(&mut buf[filled..]).await {
+            Ok(0) => {
+                records.extend_from_slice(&buf[..filled]);
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "reality: eof while reading a TLS record",
+                ));
+            }
+            Ok(n) => filled += n,
+            Err(e) => {
+                records.extend_from_slice(&buf[..filled]);
+                return Err(e);
+            }
+        }
+    }
+    records.extend_from_slice(buf);
+    Ok(())
+}
+
 /// Read TLS records off `stream` until the first handshake message (the
-/// ClientHello) is complete. Returns the raw record bytes (to replay/re-feed)
-/// and the extracted handshake message.
-async fn read_client_hello<S: AsyncRead + Unpin>(stream: &mut S) -> io::Result<(Vec<u8>, Vec<u8>)> {
-    let mut records = Vec::with_capacity(1024);
+/// ClientHello) is complete, appending every byte read to `records`.
+///
+/// The consumed bytes are appended even when an error is returned, so the
+/// caller can replay the whole stream verbatim on the steal path — the
+/// reference's `MirrorConn` forwards every byte it has read regardless of how
+/// the handshake turns out (`reality-ref/tls.go:212,282-286`).
+async fn read_client_hello<S: AsyncRead + Unpin>(
+    stream: &mut S,
+    records: &mut Vec<u8>,
+) -> io::Result<Vec<u8>> {
     let mut handshake = Vec::with_capacity(512);
     let mut header = [0u8; 5];
     loop {
-        stream.read_exact(&mut header).await?;
+        read_exact_recording(stream, &mut header, records).await?;
         let content_type = header[0];
         let len = u16::from_be_bytes([header[3], header[4]]) as usize;
         if content_type != 22 {
             // A first flight is handshake-only (possibly preceded by a
             // compatibility ChangeCipherSpec record).
             if content_type == 20 {
-                records.extend_from_slice(&header);
                 let mut body = vec![0u8; len];
-                stream.read_exact(&mut body).await?;
-                records.extend_from_slice(&body);
+                read_exact_recording(stream, &mut body, records).await?;
                 continue;
             }
             return Err(io::Error::other(format!(
@@ -480,9 +603,7 @@ async fn read_client_hello<S: AsyncRead + Unpin>(stream: &mut S) -> io::Result<(
             )));
         }
         let mut body = vec![0u8; len];
-        stream.read_exact(&mut body).await?;
-        records.extend_from_slice(&header);
-        records.extend_from_slice(&body);
+        read_exact_recording(stream, &mut body, records).await?;
         handshake.extend_from_slice(&body);
 
         if handshake.len() >= 4 {
@@ -497,7 +618,7 @@ async fn read_client_hello<S: AsyncRead + Unpin>(stream: &mut S) -> io::Result<(
                 | handshake[3] as usize;
             if handshake.len() >= 4 + msg_len {
                 handshake.truncate(4 + msg_len);
-                return Ok((records, handshake));
+                return Ok(handshake);
             }
         }
         if records.len() > 64 * 1024 {
@@ -629,7 +750,19 @@ fn read_u16(buf: &[u8], at: usize) -> Option<u16> {
     Some(u16::from_be_bytes([buf[at], buf[at + 1]]))
 }
 
+/// The 12-byte PROXY protocol v2 signature.
+const PROXY_V2_MAGIC: [u8; 12] = [
+    0x0d, 0x0a, 0x0d, 0x0a, 0x00, 0x0d, 0x0a, 0x51, 0x55, 0x49, 0x54, 0x0a,
+];
+
 /// Build a PROXY protocol header (v1 ASCII or v2 binary).
+///
+/// Mirrors `proxyproto.HeaderProxyFromAddrs` (called at
+/// `reality-ref/tls.go:176-180`) for the addresses an accepted TCP socket can
+/// have. The v2 address-length field counts only the address block, so it is
+/// 12 bytes for `AF_INET` (4 + 4 + 2 + 2) and 36 for `AF_INET6`; leaf's own
+/// VLESS fallback writes the same `0x0C`
+/// (`vless/inbound/fallback.rs`).
 fn proxy_protocol_header(
     xver: u8,
     src: std::net::SocketAddr,
@@ -648,12 +781,10 @@ fn proxy_protocol_header(
                 .into_bytes()
             } else {
                 let mut v = Vec::with_capacity(28);
-                v.extend_from_slice(&[
-                    0x0d, 0x0a, 0x0d, 0x0a, 0x00, 0x0d, 0x0a, 0x51, 0x55, 0x49, 0x54, 0x0a,
-                ]);
+                v.extend_from_slice(&PROXY_V2_MAGIC);
                 v.push(0x21); // version 2, command PROXY
                 v.push(0x11); // AF_INET, STREAM
-                v.extend_from_slice(&(16u16).to_be_bytes());
+                v.extend_from_slice(&(12u16).to_be_bytes());
                 v.extend_from_slice(&s.ip().octets());
                 v.extend_from_slice(&d.ip().octets());
                 v.extend_from_slice(&s.port().to_be_bytes());
@@ -673,9 +804,7 @@ fn proxy_protocol_header(
                 .into_bytes()
             } else {
                 let mut v = Vec::with_capacity(52);
-                v.extend_from_slice(&[
-                    0x0d, 0x0a, 0x0d, 0x0a, 0x00, 0x0d, 0x0a, 0x51, 0x55, 0x49, 0x54, 0x0a,
-                ]);
+                v.extend_from_slice(&PROXY_V2_MAGIC);
                 v.push(0x21);
                 v.push(0x21); // AF_INET6, STREAM
                 v.extend_from_slice(&(36u16).to_be_bytes());
@@ -686,7 +815,23 @@ fn proxy_protocol_header(
                 v
             }
         }
-        _ => Vec::new(),
+        _ => {
+            // A mixed v4/v6 pair cannot be expressed in the PROXY header, so
+            // the reference's `HeaderProxyFromAddrs` leaves it "unspecified":
+            // a v2 LOCAL command with the UNSPEC address family and a zero
+            // length (`\x20\x00\x00\x00` after the signature), or the v1
+            // `PROXY UNKNOWN` line. `src`/`dst` come from one accepted socket
+            // and so always share a family, making this arm unreachable in
+            // practice.
+            if xver == 1 {
+                b"PROXY UNKNOWN\r\n".to_vec()
+            } else {
+                let mut v = Vec::with_capacity(16);
+                v.extend_from_slice(&PROXY_V2_MAGIC);
+                v.extend_from_slice(&[0x20, 0x00, 0x00, 0x00]);
+                v
+            }
+        }
     }
 }
 
