@@ -27,7 +27,7 @@ real site (`dest`).
 | `target` | — | Fallback list; **only the first entry is used**, and only when `dest` is absent. |
 | `show` | `false` | Log authenticated and rejected connections. No behavioural effect. |
 | `xver` | `0` | PROXY protocol version prepended to the **steal path** connection: `0` none, `1` v1 ASCII, `2` v2 binary. Values above `2` are a startup error. |
-| `maxTimeDiffMs` / `max_time_diff_ms` | unset (no check) | Maximum accepted clock difference, in milliseconds, between the client's embedded timestamp and the server clock. Resolution is one second. |
+| `maxTimeDiffMs` / `max_time_diff_ms` | unset or `0` (no check) | Maximum accepted clock difference, in milliseconds, between the client's embedded timestamp and the server clock. Resolution is one second. |
 
 ALPN is fixed to `h2` and `http/1.1` and is not configurable.
 
@@ -37,8 +37,10 @@ A client proves itself by sending a TLS 1.3 ClientHello with:
 
 - a 32-byte `session_id`, which is the AES-256-GCM encryption of
   `version[3] || 0 || unix_time_be[4] || short_id[8]`;
-- a key share of group X25519 (29) or X25519MLKEM768 (4588); no other group
-  authenticates;
+- a key share of group X25519MLKEM768 (4588), contributing its X25519 half,
+  and/or a plain X25519 (29) key share; no other group authenticates. A
+  duplicate share of either group, or a plain X25519 share that precedes the
+  hybrid, takes the steal path;
 - an SNI matching `serverNames`.
 
 The server derives the AES key as
@@ -59,20 +61,26 @@ client verifies.
 
 Any connection that does not authenticate — no or wrong SNI, not TLS 1.3, no
 acceptable key share, wrong `session_id` length, bad decryption, unknown short
-id, or a timestamp outside the window — is handled by dialing `dest` over plain
-TCP, optionally writing a PROXY protocol header (`xver`), replaying every byte
-already read from the client verbatim, and then splicing both directions. leaf
-does **not** terminate TLS or emit a TLS alert on this path; the client simply
-continues its handshake with the real site and sees its certificate. If `dest`
-is unreachable the client gets a connection error.
+id, a timestamp outside the window, or a first record that is not a parseable
+TLS ClientHello (plain HTTP, a TLS 1.0/1.1 handshake, any probe) — is handled by
+dialing `dest` over plain TCP, optionally writing a PROXY protocol header
+(`xver`), replaying every byte already read from the client verbatim, and then
+splicing both directions. leaf does **not** terminate TLS or emit a TLS alert on
+this path; the client simply continues its handshake with the real site and sees
+its certificate. If `dest` is unreachable the client gets a connection error.
 
-A ClientHello that cannot even be parsed (wrong record or handshake type, or
-larger than 64 KiB) is a hard error, not the steal path.
+The dial and the replay of the consumed bytes happen before the inbound handler
+returns, so a dial failure still surfaces; the splice then runs in the
+background for the connection's lifetime, so a relayed connection is not subject
+to the listener's accept timeout.
 
 ### Limits
 
 - TLS 1.3 only for authentication; TLS 1.2 ClientHellos take the steal path.
 - Key exchange limited to X25519 and X25519MLKEM768.
+- X25519MLKEM768 is not required: leaf's own outbound offers only a plain
+  X25519 share, so a ClientHello with just that share still authenticates.
+  (Xray's server rejects it — it requires the hybrid share.)
 - One static embedded certificate serves every `serverNames` entry.
 - No `target` round-robin: only `target[0]` is ever consulted.
 - `xver` applies to the steal path only; authenticated clients never get a PROXY
@@ -107,6 +115,11 @@ inbounds:
 
 The outbound reuses the TLS transport and pins ALPN to `h2` and `http/1.1`. It
 is a stream-only handler.
+
+A server certificate that does not carry a matching REALITY HMAC aborts the
+handshake before any application data is sent: unlike a plain TLS client, the
+outbound never falls back to public-root validation, so a non-REALITY peer
+(e.g. a MITM or a redirected connection) cannot be mistaken for the server.
 
 ```yaml
 outbounds:
