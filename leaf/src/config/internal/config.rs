@@ -5483,6 +5483,8 @@ pub struct VlessOutboundSettings {
     pub uuid: ::std::string::String,
     // @@protoc_insertion_point(field:VlessOutboundSettings.encryption)
     pub encryption: ::std::option::Option<::std::string::String>,
+    // @@protoc_insertion_point(field:VlessOutboundSettings.flow)
+    pub flow: ::std::option::Option<::std::string::String>,
     // special fields
     // @@protoc_insertion_point(special_field:VlessOutboundSettings.special_fields)
     pub special_fields: ::protobuf::SpecialFields,
@@ -5522,6 +5524,9 @@ impl ::protobuf::Message for VlessOutboundSettings {
                 162 => {
                     self.encryption = ::std::option::Option::Some(is.read_string()?);
                 },
+                170 => {
+                    self.flow = ::std::option::Option::Some(is.read_string()?);
+                },
                 tag => {
                     ::protobuf::rt::read_unknown_or_skip_group(tag, is, self.special_fields.mut_unknown_fields())?;
                 },
@@ -5546,6 +5551,9 @@ impl ::protobuf::Message for VlessOutboundSettings {
         if let Some(v) = self.encryption.as_ref() {
             my_size += ::protobuf::rt::string_size(20, &v);
         }
+        if let Some(v) = self.flow.as_ref() {
+            my_size += ::protobuf::rt::string_size(21, &v);
+        }
         my_size += ::protobuf::rt::unknown_fields_size(self.special_fields.unknown_fields());
         self.special_fields.cached_size().set(my_size as u32);
         my_size
@@ -5563,6 +5571,9 @@ impl ::protobuf::Message for VlessOutboundSettings {
         }
         if let Some(v) = self.encryption.as_ref() {
             os.write_string(20, v)?;
+        }
+        if let Some(v) = self.flow.as_ref() {
+            os.write_string(21, v)?;
         }
         os.write_unknown_fields(self.special_fields.unknown_fields())?;
         ::std::result::Result::Ok(())
@@ -5585,6 +5596,7 @@ impl ::protobuf::Message for VlessOutboundSettings {
         self.port = 0;
         self.uuid.clear();
         self.encryption = ::std::option::Option::None;
+        self.flow = ::std::option::Option::None;
         self.special_fields.clear();
     }
 
@@ -5594,6 +5606,7 @@ impl ::protobuf::Message for VlessOutboundSettings {
             port: 0,
             uuid: ::std::string::String::new(),
             encryption: ::std::option::Option::None,
+            flow: ::std::option::Option::None,
             special_fields: ::protobuf::SpecialFields::new(),
         };
         &instance
