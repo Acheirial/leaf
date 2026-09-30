@@ -322,6 +322,7 @@ message VlessOutboundSettings {
     uint32 port = 2;
     string uuid = 3;
     optional string encryption = 20;
+    optional string flow = 21;
 }
 
 message RealityOutboundSettings {

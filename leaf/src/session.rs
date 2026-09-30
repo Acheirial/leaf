@@ -108,6 +108,12 @@ pub struct Session {
     pub http_sniffed_domain: Option<String>,
     /// The sniffed domain name if the destination is an IP address.
     pub dns_sniffed_domain: Option<String>,
+    /// The server name of the outer TLS or REALITY connection, available as
+    /// soon as the inbound transport is established. Used by the VLESS
+    /// fallbacks, which must select before any payload has been sniffed.
+    pub outer_sni: Option<String>,
+    /// The ALPN protocol negotiated on the outer TLS or REALITY connection.
+    pub outer_alpn: Option<String>,
     /// Shared state to coordinate XTLS vision read raw mode.
     pub vision_read_raw: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Skip domain resolution during routing.
@@ -131,6 +137,8 @@ impl Clone for Session {
             tls_sniffed_domain: self.tls_sniffed_domain.clone(),
             http_sniffed_domain: self.http_sniffed_domain.clone(),
             dns_sniffed_domain: self.dns_sniffed_domain.clone(),
+            outer_sni: self.outer_sni.clone(),
+            outer_alpn: self.outer_alpn.clone(),
             vision_read_raw: self.vision_read_raw.clone(),
             skip_resolve: self.skip_resolve,
         }
@@ -154,6 +162,8 @@ impl Default for Session {
             tls_sniffed_domain: None,
             http_sniffed_domain: None,
             dns_sniffed_domain: None,
+            outer_sni: None,
+            outer_alpn: None,
             vision_read_raw: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             skip_resolve: false,
         }
